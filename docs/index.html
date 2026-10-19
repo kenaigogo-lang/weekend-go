@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>週末去哪</title>
+<meta name="theme-color" content="#c2410c">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚗</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>週末去哪 <span class="sub">從樹林出發</span></h1>
+  <div id="weather" class="weather">天氣載入中…</div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button data-tab="pick" class="on">幫我決定</button>
+  <button data-tab="routes">半日遊</button>
+  <button data-tab="events">展覽</button>
+  <button data-tab="log">去過</button>
+</nav>
+
+<main>
+  <section id="tab-pick" class="tab on">
+    <button id="pickBtn" class="big">🎲 這次去哪？</button>
+    <div id="pickOut"></div>
+    <h2 class="sec">⏰ 快結束的展覽</h2>
+    <div id="endingSoon"></div>
+  </section>
+
+  <section id="tab-routes" class="tab">
+    <div class="chips" id="routeChips"></div>
+    <div id="routeList"></div>
+  </section>
+
+  <section id="tab-events" class="tab">
+    <input id="evSearch" class="search" type="search" placeholder="搜尋展覽、地點…">
+    <div class="chips" id="evChips"></div>
+    <div id="evList"></div>
+    <p class="muted small" id="evUpdated"></p>
+  </section>
+
+  <section id="tab-log" class="tab">
+    <div id="logList"></div>
+    <div class="card howto">
+      <b>怎麼記錄？</b>
+      <p>在行程頁按「✅ 我們去了」，會開一張 GitHub 表單，填好送出就好。系統會自動寫進紀錄，下次推薦時就會避開。</p>
+      <p>要記錄沒有在清單上的地方：<a id="freeLog" target="_blank" rel="noopener">手動新增一筆</a></p>
+    </div>
+  </section>
+</main>
+
+<div id="detail" class="sheet" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

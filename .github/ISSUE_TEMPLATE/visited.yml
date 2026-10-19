@@ -1,0 +1,33 @@
+name: 我們去過了
+description: 記錄一次真的有出門的行程，之後推薦會避開
+title: "[去過] "
+labels: ["visited"]
+body:
+  - type: input
+    id: route
+    attributes:
+      label: 行程
+      description: 從網頁按按鈕會自動帶入；清單外的地方直接寫名稱
+    validations:
+      required: true
+  - type: input
+    id: date
+    attributes:
+      label: 日期
+      placeholder: "2026-10-25"
+    validations:
+      required: true
+  - type: dropdown
+    id: rating
+    attributes:
+      label: 好不好玩
+      options:
+        - 😍 超讚，會再去
+        - 🙂 不錯
+        - 😐 普通
+        - 🙅 不推
+  - type: textarea
+    id: note
+    attributes:
+      label: 心得／吃了什麼
+      placeholder: 例如：鼎泰豐排了 40 分鐘，下次要提早取號
