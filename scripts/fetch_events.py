@@ -55,7 +55,7 @@ def fetch(url, data=None, headers=None, timeout=60):
 
 
 def text_of(fragment):
-    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", fragment or ""))).strip()
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", str(fragment or "")))).strip()
 
 
 def make_event(id, title, start, end, place, address, c, price, url, unit, desc):
@@ -173,12 +173,15 @@ def huashan():
 
 def songshan():
     base = "https://www.songshanculturalpark.org"
-    out = []
+    out, seen = [], set()
     for page in range(1, 8):
         page_html = fetch(f"{base}/exhibition?page={page}")
         rows = page_html.split('<div class="rows">')[1:]
-        if not rows:
+        ids = set(re.findall(r'class="btn" href="/exhibition/activity/([\w-]+)"', "".join(rows)))
+        # 超過最後一頁時網站會回傳最後一頁的內容
+        if not rows or ids <= seen:
             break
+        seen |= ids
         for row in rows:
             m_date = re.search(r'class="date[^"]*">\s*(\d{4}-\d\d-\d\d)\s*-\s*(\d{4}-\d\d-\d\d)', row)
             m_title = re.search(r'class="lv_h2">(.*?)</p>', row, re.S)
@@ -188,8 +191,8 @@ def songshan():
             title = text_of(m_title.group(1))
             m_desc = re.search(r'class="article">(.*?)</p>', row, re.S)
             desc = text_of(m_desc.group(1)) if m_desc else ""
-            # 松菸「展演資訊」混著市集、論壇、表演，只留看起來是展覽的
-            if not re.search(r"展|博覽", title + desc) or "攻略" in title:
+            # 松菸「展演資訊」混著市集、論壇、表演，只留標題看起來是展覽的
+            if not re.search(r"展|博覽", title):
                 continue
             start, end = (date.fromisoformat(m_date.group(i)) for i in (1, 2))
             if in_window(start, end):
@@ -213,6 +216,9 @@ def tfam():
             continue
         if not in_window(start, end):
             continue
+        # 北美館辦的海外展、線上展，人到不了館裡看
+        if re.search(r"威尼斯|義大利|海外|線上|Net\.Open", (ex.get("Area") or "") + (ex.get("ExName") or "")):
+            continue
         url = f"https://www.tfam.museum/Exhibition/Exhibition_page.aspx?id={ex['ExID']}&ddlLang=zh-tw"
         out.append(venue_event("tfam", ex["ExID"], ex.get("ExName") or "", start, end, url,
                                text_of(ex.get("Content")), room=ex.get("Area") or ""))
@@ -233,7 +239,7 @@ def cksmh():
             continue
         title = text_of(m_title.group(1))
         m_desc = re.search(r'class="p">(.*?)</div>', block, re.S)
-        m_room = re.search(r"地點：([^<]*)", block)
+        m_room = re.search(r"activity-season[^>]*>\s*地點：([^<]*)", block)
         url = html.unescape(m_link.group(1))
         m_id = re.search(r"actId=(\d+)", url)
         out.append(venue_event(
@@ -262,11 +268,13 @@ def ntcam():
             continue
         if not in_window(start, end):
             continue
+        cost = ex.get("ExCost")
+        cost = "免費" if cost == 0 else f"全票 {cost} 元" if isinstance(cost, int) else text_of(cost)
         out.append(venue_event(
             "ntcam", ex["ExNo"], ex.get("ExName") or "", start, end,
             f"https://ntcart.museum/exhibition_content.aspx?id={ex['ExNo']}",
-            text_of(ex.get("ExInfo")), price=text_of(ex.get("ExCost")),
-            room=text_of(ex.get("ExLocationTextTW")),
+            text_of(ex.get("ContentDesc") or ex.get("ExInfo")), price=cost,
+            room=re.sub(r"^新北市美術館\s*[–-]?\s*", "", text_of(ex.get("ExLocationTextTW"))),
         ))
     return out
 
