@@ -2,7 +2,7 @@ const REPO = "kenaigogo-lang/weekend-go";
 const HOME = { name: "樹林車站", lat: 24.9906, lng: 121.4246 };
 const RAIN_OK = ["雨天OK", "室內"];
 
-const state = { routes: [], events: [], visited: [], skipped: [], weather: null, pickOrder: [], pickIdx: 0, routeFilter: "全部", evFilter: "全部" };
+const state = { routes: [], events: [], visited: [], skipped: [], venues: [], foods: {}, weather: null, pickOrder: [], pickIdx: 0, routeFilter: "全部", evFilter: "全部" };
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -30,8 +30,9 @@ function fullRouteUrl(route) {
   if (stops.length) u += `&waypoints=${enc(stops.join("|"))}`;
   return u;
 }
-function logUrl(id, name) {
+function logUrl(id, name, note = "") {
   const q = new URLSearchParams({ template: "visited.yml", title: `[去過] ${name}`, route: id ? `${id} ${name}` : name, date: ymd(new Date()) });
+  if (note) q.set("note", note);
   return `https://github.com/${REPO}/issues/new?${q}`;
 }
 function skipUrl(id, name) {
@@ -201,8 +202,9 @@ function eventCard(e) {
       ${badge}
     </div>
     ${e.price ? `<div class="meta" style="margin-top:2px">🎟️ ${esc(e.price.slice(0, 60))}</div>` : ""}
+    <button class="btn primary" style="display:block;width:100%;margin-top:10px" data-plan="${esc(e.id)}">🗺️ 排成半日遊</button>
     <div class="row">
-      <a class="btn primary" href="${navUrl(dest)}" target="_blank" rel="noopener">導航</a>
+      <a class="btn" href="${navUrl(dest)}" target="_blank" rel="noopener">導航</a>
       <a class="btn" href="${esc(e.url || "https://www.google.com/search?q=" + enc(e.title))}" target="_blank" rel="noopener">展覽資訊</a>
       <a class="btn" href="${logUrl("", "展覽：" + e.title)}" target="_blank" rel="noopener">✅ 去了</a>
       ${eventHidden(e) ? `<button class="btn" data-unhide="e:${esc(e.title)}">恢復</button>` : `<button class="btn" data-hide="e:${esc(e.title)}">🙈 不想去</button>`}
@@ -231,6 +233,7 @@ function renderTimeline(r, start) {
       <div class="links">
         ${s.drive ? `<a href="${navUrl(s.q)}" target="_blank" rel="noopener">🧭 導航</a><a href="${searchUrl(s.q + " 附近停車場")}" target="_blank" rel="noopener">🅿️ 找停車</a>` : ""}
         <a href="${searchUrl(s.q)}" target="_blank" rel="noopener">🗺️ 地圖・營業時間</a>
+        ${s.swap ? `<a href="#" data-swap="${s.swap}">🔄 換一${s.swap === "eat" ? "家" : "個"}</a>` : ""}
       </div>
     </li>`;
   });
@@ -275,13 +278,119 @@ function openRoute(id, push = true) {
   $("#nowBtn").onclick = () => { input.value = fmt(soon); input.oninput(); };
   $("#closeBtn").onclick = () => history.back();
 }
+// ---------- 展覽排成半日遊 ----------
+// 依展覽所在場館，從 venues.json 挑散步點和吃的，照時間排順序：11:00–12:30 到就先吃午餐
+function findVenue(e) {
+  const vs = state.venues;
+  return vs.find((v) => v.match.some((m) => e.place.includes(m)))
+    || vs.find((v) => v.match.some((m) => e.address.includes(m)))
+    || (e.lat ? vs.find((v) => kmBetween(v, e) <= 1) : null);
+}
+const ate = (name) => state.visited.some((v) => (v.note || "").includes(name) || v.title.includes(name));
+function mealAt(min) {
+  if (min < 630) return "早餐";
+  if (min < 840) return "午餐";
+  if (min < 1020) return "點心";
+  if (min < 1230) return "晚餐";
+  return "點心";
+}
+function choose(list, idx, fits) {
+  let c = list.filter(fits);
+  if (!c.length) c = list;
+  c = [...c.filter((x) => !ate(x.name)), ...c.filter((x) => ate(x.name))];
+  return c.length ? c[idx % c.length] : null;
+}
+function eatStep(venue, e, meal, idx, drive) {
+  const f = venue && choose(state.foods[venue.food] || [], idx, (x) => x.meals.includes(meal));
+  if (!f) {
+    return { kind: "eat", title: `${meal}：附近找吃的`, q: `${e.place} 附近 小吃`, drive, stay: 50,
+      detail: "這個場館附近還沒整理過在地老店，先用地圖找評價高、不是連鎖的店。想固定推薦的話，跟 Claude 說一聲。" };
+  }
+  return { kind: "eat", title: `${meal}：${f.name}`, name: f.name, q: f.q, drive: drive + (f.drive || 0), stay: f.stay,
+    detail: f.detail + (ate(f.name) ? "（之前吃過）" : ""), swap: "eat" };
+}
+function buildPlan(e, venue, start, sel) {
+  const drive0 = e.min ?? (venue ? Math.round(5 + kmBetween(HOME, venue) * 1.6) : 40);
+  const exhibit = { kind: "see", title: e.title, q: e.address || e.place, drive: drive0, stay: 90,
+    detail: `📍 ${e.place}${e.price ? `｜🎟️ ${e.price.slice(0, 50)}` : ""}${venue ? `｜🅿️ 可以停 ${venue.parking}` : ""}` };
+  const w = venue && choose(venue.walks, sel.walk, () => true);
+  const walk = w && { kind: "walk", title: w.name, name: w.name, q: w.q, drive: w.drive, stay: w.stay, detail: w.detail, swap: "walk" };
+  const arrive = toMin(start) + drive0;
+  if (arrive >= 660 && arrive <= 750) {
+    const eat = eatStep(venue, e, "午餐", sel.eat, 0);
+    const back = eat.drive;
+    eat.drive = drive0 + eat.drive;
+    return { drive: drive0, steps: [eat, { ...exhibit, drive: back }, walk].filter(Boolean) };
+  }
+  const afterWalk = arrive + exhibit.stay + (walk ? walk.drive + walk.stay : 0);
+  return { drive: drive0, steps: [exhibit, walk, eatStep(venue, e, mealAt(afterWalk), sel.eat, 0)].filter(Boolean) };
+}
+
+function openPlan(id, push = true) {
+  const e = state.events.find((x) => x.id === id);
+  if (!e) return;
+  if (push) history.pushState({ id }, "", `#e/${enc(id)}`);
+  const venue = findVenue(e);
+  const sel = { eat: 0, walk: 0 };
+  const now = new Date();
+  const soon = Math.ceil((now.getHours() * 60 + now.getMinutes() + 10) / 15) * 15;
+  const others = state.events.filter((x) => x.id !== id && !eventHidden(x) && !eventSeen(x) && daysUntil(x.start) <= 0
+    && (venue ? findVenue(x) === venue : x.place === e.place));
+  const el = $("#detail");
+  el.innerHTML = `<div class="sheet-in">
+    <div class="close"><button id="closeBtn">← 返回</button><span class="muted small">${esc(venue ? venue.name : e.place)}</span></div>
+    <h2 style="margin:4px 0">🖼️ ${esc(e.title)}</h2>
+    <div class="meta"><span>${e.permanent ? "常設展" : `展到 ${e.end.slice(5).replace("-", "/")}`}</span>${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">展覽資訊</a>` : ""}</div>
+    ${venue ? "" : `<p class="small badge">這個場館附近還沒整理過，吃的部分先用地圖搜尋。</p>`}
+    <a class="btn primary" style="display:block;margin-top:10px" id="planNav" target="_blank" rel="noopener">🚗 整條路線一鍵導航</a>
+    <div class="depart">幾點出發
+      <input type="time" id="departAt" value="13:00" step="900">
+      <button class="btn" id="nowBtn" style="flex:none">現在出發</button>
+    </div>
+    <ol class="timeline" id="tl"></ol>
+    ${others.length ? `<h3 class="sec">🖼️ 同一區還有 ${others.length} 檔，可以一起看</h3>${others.slice(0, 6).map(eventCard).join("")}` : ""}
+    <h3 class="sec">💡 小提醒</h3>
+    <ul class="tips"><li>按「🔄 換一家」可以換吃的和散步點，吃過的店會排在後面</li><li>店家營業時間可能會變，點「地圖・營業時間」確認</li></ul>
+    <a class="btn" style="display:block" id="planLog" target="_blank" rel="noopener">✅ 我們去了，記錄一下</a>
+  </div>`;
+  el.hidden = false;
+  el.scrollTop = 0;
+  document.body.style.overflow = "hidden";
+  const input = $("#departAt");
+  const draw = () => {
+    if (!input.value) return;
+    const plan = buildPlan(e, venue, input.value, sel);
+    $("#tl").innerHTML = renderTimeline(plan, input.value);
+    $("#planNav").href = fullRouteUrl(plan);
+    const note = "排的行程：" + plan.steps.map((s) => s.name || s.title).join(" → ");
+    $("#planLog").href = logUrl("", "展覽：" + e.title, note);
+  };
+  input.oninput = draw;
+  $("#nowBtn").onclick = () => { input.value = fmt(soon); draw(); };
+  $("#closeBtn").onclick = () => history.back();
+  $("#tl").onclick = (ev) => {
+    const b = ev.target.closest("[data-swap]");
+    if (!b) return;
+    ev.preventDefault();
+    sel[b.dataset.swap]++;
+    draw();
+  };
+  draw();
+}
+
 function closeRoute() {
   $("#detail").hidden = true;
   document.body.style.overflow = "";
 }
+function openFromHash() {
+  const r = location.hash.match(/^#r\/(\w+)/);
+  const e = location.hash.match(/^#e\/(.+)/);
+  if (r) openRoute(r[1], false);
+  else if (e) openPlan(decodeURIComponent(e[1]), false);
+  else closeRoute();
+}
 window.addEventListener("popstate", () => {
-  const m = location.hash.match(/^#r\/(\w+)/);
-  m ? openRoute(m[1], false) : closeRoute();
+  openFromHash();
 });
 
 // ---------- 列表 ----------
@@ -320,6 +429,9 @@ function renderEvents() {
     }
   });
   $("#evList").innerHTML = list.map(eventCard).join("") || `<div class="empty">沒有符合的展覽</div>`;
+  // 還沒有周邊資料的場館，列出來方便請 Claude 補
+  const missing = [...new Set(state.events.filter((e) => !findVenue(e)).map((e) => e.place.split(/\s/)[0]))];
+  $("#evMissing").textContent = missing.length ? `這些場館附近還沒整理吃的（排行程時會先用地圖搜尋代替）：${missing.join("、")}` : "";
 }
 
 function renderEndingSoon() {
@@ -345,10 +457,11 @@ function renderAll() {
 }
 
 document.addEventListener("click", (ev) => {
-  const t = ev.target.closest("[data-tab],[data-open],[data-rf],[data-ef],[data-hide],[data-unhide]");
+  const t = ev.target.closest("[data-tab],[data-open],[data-rf],[data-ef],[data-hide],[data-unhide],[data-plan]");
   if (!t) return;
   if (t.dataset.hide) { ev.stopPropagation(); hide(t.dataset.hide); if (t.closest("#pickOut")) doPick(); return; }
   if (t.dataset.unhide) { unhide(t.dataset.unhide); return; }
+  if (t.dataset.plan) { openPlan(t.dataset.plan); return; }
   if (t.dataset.tab) {
     document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b === t));
     document.querySelectorAll(".tab").forEach((s) => s.classList.toggle("on", s.id === "tab-" + t.dataset.tab));
@@ -363,16 +476,17 @@ $("#pickBtn").onclick = doPick;
 $("#evSearch").oninput = renderEvents;
 
 (async function init() {
-  const [routes, events, visited, skipped] = await Promise.all([
-    getJson("data/routes.json"), getJson("data/events.json"), getJson("data/visited.json"), getJson("data/skipped.json"),
+  const [routes, events, visited, skipped, venues] = await Promise.all([
+    getJson("data/routes.json"), getJson("data/events.json"), getJson("data/visited.json"), getJson("data/skipped.json"), getJson("data/venues.json"),
   ]);
   state.routes = routes?.routes || [];
   state.events = events?.events || [];
   state.visited = visited?.visits || [];
   state.skipped = skipped?.skips || [];
+  state.venues = venues?.venues || [];
+  state.foods = venues?.foods || {};
   $("#evUpdated").textContent = events?.updated ? `展覽資料更新於 ${events.updated}（文化部藝文活動開放資料）` : "展覽資料暫時抓不到";
   renderRoutes(); renderEvents(); renderEndingSoon(); renderLog();
   await loadWeather();
-  const m = location.hash.match(/^#r\/(\w+)/);
-  if (m) openRoute(m[1], false);
+  if (location.hash) openFromHash();
 })();
