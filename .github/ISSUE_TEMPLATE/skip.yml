@@ -1,0 +1,17 @@
+name: 不想去
+description: 把一條路線或一檔展覽從推薦和清單裡拿掉（兩支手機都會生效）
+title: "[不想去] "
+labels: ["skip"]
+body:
+  - type: input
+    id: route
+    attributes:
+      label: 行程
+      description: 從網頁按按鈕會自動帶入
+    validations:
+      required: true
+  - type: input
+    id: reason
+    attributes:
+      label: 原因（可不填）
+      placeholder: 例如：太遠、沒興趣

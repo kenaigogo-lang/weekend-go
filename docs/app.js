@@ -2,7 +2,7 @@ const REPO = "kenaigogo-lang/weekend-go";
 const HOME = { name: "樹林車站", lat: 24.9906, lng: 121.4246 };
 const RAIN_OK = ["雨天OK", "室內"];
 
-const state = { routes: [], events: [], visited: [], weather: null, pickOrder: [], pickIdx: 0, routeFilter: "全部", evFilter: "全部" };
+const state = { routes: [], events: [], visited: [], skipped: [], weather: null, pickOrder: [], pickIdx: 0, routeFilter: "全部", evFilter: "全部" };
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -33,6 +33,49 @@ function fullRouteUrl(route) {
 function logUrl(id, name) {
   const q = new URLSearchParams({ template: "visited.yml", title: `[去過] ${name}`, route: id ? `${id} ${name}` : name, date: ymd(new Date()) });
   return `https://github.com/${REPO}/issues/new?${q}`;
+}
+function skipUrl(id, name) {
+  const q = new URLSearchParams({ template: "skip.yml", title: `[不想去] ${name}`, route: id ? `${id} ${name}` : name });
+  return `https://github.com/${REPO}/issues/new?${q}`;
+}
+
+// ---------- 不想去 ----------
+// 按下去先在這支手機藏起來（localStorage），再用 GitHub 表單同步成兩支手機都藏（skipped.json）
+const HIDE_KEY = "weekend-go-hidden";
+function localHidden() {
+  try { return new Set(JSON.parse(localStorage.getItem(HIDE_KEY) || "[]")); } catch { return new Set(); }
+}
+function saveLocalHidden(set) {
+  try { localStorage.setItem(HIDE_KEY, JSON.stringify([...set])); } catch {}
+}
+const syncedHidden = () => new Set(state.skipped.map((s) => (s.route ? `r:${s.route}` : `e:${s.title.replace(/^展覽：/, "").trim()}`)));
+const isHidden = (key) => localHidden().has(key) || syncedHidden().has(key);
+const routeHidden = (r) => isHidden(`r:${r.id}`);
+const eventHidden = (e) => isHidden(`e:${e.title}`);
+
+function toast(html) {
+  let el = $("#toast");
+  if (!el) { el = document.createElement("div"); el.id = "toast"; el.className = "toast"; document.body.append(el); }
+  el.innerHTML = html;
+  el.hidden = false;
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => { el.hidden = true; }, 9000);
+}
+
+function hide(key) {
+  const set = localHidden(); set.add(key); saveLocalHidden(set);
+  const [kind, val] = [key.slice(0, 1), key.slice(2)];
+  const r = kind === "r" && state.routes.find((x) => x.id === val);
+  const url = r ? skipUrl(r.id, r.name) : skipUrl("", "展覽：" + val);
+  toast(`已在這支手機藏起來。<a href="${url}" target="_blank" rel="noopener">同步到兩支手機 →</a>`);
+  state.pickOrder = [];
+  if (r && !$("#detail").hidden) history.back();
+  renderAll();
+}
+function unhide(key) {
+  const set = localHidden(); set.delete(key); saveLocalHidden(set);
+  if (syncedHidden().has(key)) toast("這個已經同步到兩支手機了。要恢復的話，請 Claude 從 skipped.json 拿掉。");
+  renderAll();
 }
 
 // ---------- 資料 ----------
@@ -84,7 +127,7 @@ const seenPlaces = (r) => { const { places } = visitedSets(); return r.steps.fil
 
 function nearbyEvents(route, maxKm = 3) {
   const spots = route.steps.filter((s) => s.lat);
-  return state.events.filter((e) => e.lat && !eventSeen(e) && daysUntil(e.start) <= 0 && spots.some((s) => kmBetween(s, e) <= maxKm))
+  return state.events.filter((e) => e.lat && !eventSeen(e) && !eventHidden(e) && daysUntil(e.start) <= 0 && spots.some((s) => kmBetween(s, e) <= maxKm))
     .sort((a, b) => a.permanent - b.permanent || a.end.localeCompare(b.end));
 }
 const rainOk = (r) => r.tags.some((t) => RAIN_OK.includes(t));
@@ -108,11 +151,11 @@ function scoreRoute(r) {
 function doPick() {
   if (!state.pickOrder.length || state.pickIdx >= state.pickOrder.length) {
     const done = visitedSets().routes;
-    state.pickOrder = state.routes.filter((r) => !done.has(r.id)).map(scoreRoute).sort((a, b) => b.s - a.s);
+    state.pickOrder = state.routes.filter((r) => !done.has(r.id) && !routeHidden(r)).map(scoreRoute).sort((a, b) => b.s - a.s);
     state.pickIdx = 0;
   }
   if (!state.pickOrder.length) {
-    $("#pickOut").innerHTML = `<div class="card">清單上的路線全部都去過了 🎉 跟 Claude 說一聲，請它再整理一批新路線。</div>`;
+    $("#pickOut").innerHTML = `<div class="card">清單上的路線都去過或藏起來了 🎉 跟 Claude 說一聲，請它再整理一批新路線。</div>`;
     return;
   }
   const { r, why } = state.pickOrder[state.pickIdx++];
@@ -125,6 +168,7 @@ function doPick() {
       <div class="row">
         <button class="btn primary" data-open="${r.id}">看行程 →</button>
         <button class="btn" id="again">換一個</button>
+        <button class="btn" data-hide="r:${r.id}">🙈 不想去</button>
       </div>
     </div>`;
   $("#again").onclick = doPick;
@@ -161,6 +205,7 @@ function eventCard(e) {
       <a class="btn primary" href="${navUrl(dest)}" target="_blank" rel="noopener">導航</a>
       <a class="btn" href="${esc(e.url || "https://www.google.com/search?q=" + enc(e.title))}" target="_blank" rel="noopener">展覽資訊</a>
       <a class="btn" href="${logUrl("", "展覽：" + e.title)}" target="_blank" rel="noopener">✅ 去了</a>
+      ${eventHidden(e) ? `<button class="btn" data-unhide="e:${esc(e.title)}">恢復</button>` : `<button class="btn" data-hide="e:${esc(e.title)}">🙈 不想去</button>`}
     </div>
   </div>`;
 }
@@ -218,6 +263,9 @@ function openRoute(id, push = true) {
     <h3 class="sec">📒 紀錄</h3>
     ${visits.length ? visits.map((v) => `<div class="card"><b>${v.date}</b> ${esc(v.rating || "")}<div class="small">${esc(v.note || "")}</div></div>`).join("") : `<p class="muted small">還沒去過</p>`}
     <a class="btn" style="display:block" href="${logUrl(r.id, r.name)}" target="_blank" rel="noopener">✅ 我們去了，記錄一下</a>
+    ${routeHidden(r)
+      ? `<button class="btn" style="display:block;width:100%;margin-top:8px" data-unhide="r:${r.id}">恢復這條路線</button>`
+      : `<button class="btn" style="display:block;width:100%;margin-top:8px" data-hide="r:${r.id}">🙈 不想去，不要再推薦</button>`}
   </div>`;
   el.hidden = false;
   el.scrollTop = 0;
@@ -239,27 +287,30 @@ window.addEventListener("popstate", () => {
 // ---------- 列表 ----------
 function renderRoutes() {
   // 去過的路線預設藏起來，要看就點「✓ 去過的」
-  const filters = ["全部", "看展", "美食", "雨天OK", "近", "夕陽", "✓ 去過的"];
+  const filters = ["全部", "看展", "美食", "雨天OK", "近", "夕陽", "✓ 去過的", "🙈 不想去的"];
   $("#routeChips").innerHTML = filters.map((f) => `<button class="${f === state.routeFilter ? "on" : ""}" data-rf="${f}">${f}</button>`).join("");
   const done = visitedSets().routes;
   const f = state.routeFilter;
   const list = state.routes.filter((r) => {
     if (f === "✓ 去過的") return done.has(r.id);
-    if (done.has(r.id)) return false;
+    if (f === "🙈 不想去的") return routeHidden(r);
+    if (done.has(r.id) || routeHidden(r)) return false;
     if (f === "全部") return true;
     if (f === "雨天OK") return rainOk(r);
     return r.tags.includes(f);
   }).sort((a, b) => seenPlaces(a).length - seenPlaces(b).length || a.drive - b.drive);
   $("#routeList").innerHTML = list.map(routeCard).join("")
-    || `<div class="empty">${f === "✓ 去過的" ? "還沒有去過的路線" : "沒有符合的路線"}</div>`;
+    || `<div class="empty">${f === "✓ 去過的" ? "還沒有去過的路線" : f === "🙈 不想去的" ? "沒有藏起來的路線" : "沒有符合的路線"}</div>`;
 }
 
 function renderEvents() {
-  const filters = ["全部", "30 分內", "快結束", "免費", "新開展"];
+  const filters = ["全部", "30 分內", "快結束", "免費", "新開展", "🙈 不想去的"];
   $("#evChips").innerHTML = filters.map((f) => `<button class="${f === state.evFilter ? "on" : ""}" data-ef="${f}">${f}</button>`).join("");
   const q = $("#evSearch").value.trim();
   const list = state.events.filter((e) => {
     if (q && !(e.title + e.place + e.address).includes(q)) return false;
+    if (state.evFilter === "🙈 不想去的") return eventHidden(e);
+    if (eventHidden(e)) return false;
     switch (state.evFilter) {
       case "30 分內": return e.min && e.min <= 30;
       case "快結束": return !e.permanent && daysUntil(e.end) <= 14 && daysUntil(e.start) <= 0;
@@ -272,7 +323,7 @@ function renderEvents() {
 }
 
 function renderEndingSoon() {
-  const list = state.events.filter((e) => !e.permanent && !eventSeen(e) && daysUntil(e.start) <= 0 && daysUntil(e.end) <= 21)
+  const list = state.events.filter((e) => !e.permanent && !eventSeen(e) && !eventHidden(e) && daysUntil(e.start) <= 0 && daysUntil(e.end) <= 21)
     .sort((a, b) => a.end.localeCompare(b.end)).slice(0, 3);
   $("#endingSoon").innerHTML = list.map(eventCard).join("") || `<p class="muted small">最近沒有快結束的展覽</p>`;
 }
@@ -289,9 +340,15 @@ function renderLog() {
 }
 
 // ---------- 事件 ----------
+function renderAll() {
+  renderRoutes(); renderEvents(); renderEndingSoon(); renderLog();
+}
+
 document.addEventListener("click", (ev) => {
-  const t = ev.target.closest("[data-tab],[data-open],[data-rf],[data-ef]");
+  const t = ev.target.closest("[data-tab],[data-open],[data-rf],[data-ef],[data-hide],[data-unhide]");
   if (!t) return;
+  if (t.dataset.hide) { ev.stopPropagation(); hide(t.dataset.hide); if (t.closest("#pickOut")) doPick(); return; }
+  if (t.dataset.unhide) { unhide(t.dataset.unhide); return; }
   if (t.dataset.tab) {
     document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b === t));
     document.querySelectorAll(".tab").forEach((s) => s.classList.toggle("on", s.id === "tab-" + t.dataset.tab));
@@ -306,12 +363,13 @@ $("#pickBtn").onclick = doPick;
 $("#evSearch").oninput = renderEvents;
 
 (async function init() {
-  const [routes, events, visited] = await Promise.all([
-    getJson("data/routes.json"), getJson("data/events.json"), getJson("data/visited.json"),
+  const [routes, events, visited, skipped] = await Promise.all([
+    getJson("data/routes.json"), getJson("data/events.json"), getJson("data/visited.json"), getJson("data/skipped.json"),
   ]);
   state.routes = routes?.routes || [];
   state.events = events?.events || [];
   state.visited = visited?.visits || [];
+  state.skipped = skipped?.skips || [];
   $("#evUpdated").textContent = events?.updated ? `展覽資料更新於 ${events.updated}（文化部藝文活動開放資料）` : "展覽資料暫時抓不到";
   renderRoutes(); renderEvents(); renderEndingSoon(); renderLog();
   await loadWeather();

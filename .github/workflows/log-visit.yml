@@ -1,4 +1,4 @@
-name: 記錄去過的行程
+name: 記錄去過／不想去
 
 on:
   issues:
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   log:
-    if: contains(github.event.issue.labels.*.name, 'visited')
+    if: contains(github.event.issue.labels.*.name, 'visited') || contains(github.event.issue.labels.*.name, 'skip')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,13 +25,14 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          KIND: ${{ contains(github.event.issue.labels.*.name, 'skip') && 'skip' || 'visited' }}
         run: python3 scripts/log_visit.py
 
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/data/visited.json 行程紀錄.md
+          git add docs/data/visited.json docs/data/skipped.json 行程紀錄.md
           git commit -m "記錄行程 #${{ github.event.issue.number }}"
           git pull --rebase
           git push

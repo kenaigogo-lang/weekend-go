@@ -1,11 +1,14 @@
-"""把「我們去過了」issue 表單的內容寫進 docs/data/visited.json，並重新產生 行程紀錄.md。"""
+"""把「我們去過了」issue 表單寫進 docs/data/visited.json 並重新產生 行程紀錄.md；
+KIND=skip 時改把「不想去」寫進 docs/data/skipped.json。"""
 import json
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 VISITED = ROOT / "docs" / "data" / "visited.json"
+SKIPPED = ROOT / "docs" / "data" / "skipped.json"
 ROUTES = ROOT / "docs" / "data" / "routes.json"
 DOC = ROOT / "行程紀錄.md"
 
@@ -44,7 +47,20 @@ def main():
     if rid in names:
         title = names[rid]
     else:
-        rid, title = "", raw or os.environ.get("ISSUE_TITLE", "").replace("[去過]", "").strip()
+        rid, title = "", raw or re.sub(r"^\[(去過|不想去)\]", "", os.environ.get("ISSUE_TITLE", "")).strip()
+
+    if os.environ.get("KIND") == "skip":
+        data = json.loads(SKIPPED.read_text(encoding="utf-8")) if SKIPPED.exists() else {"skips": []}
+        data["skips"].append({
+            "date": datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d"),
+            "route": rid,
+            "title": title,
+            "reason": fields.get("原因（可不填）", ""),
+            "issue": int(os.environ.get("ISSUE_NUMBER", "0") or 0),
+        })
+        SKIPPED.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"skipped {title}")
+        return
 
     date = fields.get("日期", "").strip().replace("/", "-")
     m = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", date)
