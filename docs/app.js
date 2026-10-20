@@ -49,7 +49,8 @@ function localHidden() {
 function saveLocalHidden(set) {
   try { localStorage.setItem(HIDE_KEY, JSON.stringify([...set])); } catch {}
 }
-const syncedHidden = () => new Set(state.skipped.map((s) => (s.route ? `r:${s.route}` : `e:${s.title.replace(/^展覽：/, "").trim()}`)));
+const syncedHidden = () => new Set(state.skipped.map((s) => (s.route ? `r:${s.route}`
+  : s.title.startsWith("表演：") ? `s:${s.title.slice(3).trim()}` : `e:${s.title.replace(/^展覽：/, "").trim()}`)));
 const isHidden = (key) => localHidden().has(key) || syncedHidden().has(key);
 const routeHidden = (r) => isHidden(`r:${r.id}`);
 const eventHidden = (e) => isHidden(`e:${e.title}`);
@@ -67,7 +68,7 @@ function hide(key) {
   const set = localHidden(); set.add(key); saveLocalHidden(set);
   const [kind, val] = [key.slice(0, 1), key.slice(2)];
   const r = kind === "r" && state.routes.find((x) => x.id === val);
-  const url = r ? skipUrl(r.id, r.name) : skipUrl("", "展覽：" + val);
+  const url = r ? skipUrl(r.id, r.name) : skipUrl("", (kind === "s" ? "表演：" : "展覽：") + val);
   toast(`已在這支手機藏起來。<a href="${url}" target="_blank" rel="noopener">同步到兩支手機 →</a>`);
   state.pickOrder = [];
   if (r && !$("#detail").hidden) history.back();
@@ -188,6 +189,16 @@ function doPick() {
     </div>`;
   $("#again").onclick = doPick;
   $("#pickBtn").textContent = "🎲 再抽一次";
+  if (state.pickMode === "night") {
+    const iso = nightDays()[new Date().getHours() >= 20 ? 1 : 0];
+    const n = state.shows.filter((s) => s.date === iso && !showHidden(s)).length;
+    if (n) {
+      $("#pickOut").insertAdjacentHTML("beforeend",
+        `<div class="card"><b>🎭 ${dayLabel(iso, iso === ymd(new Date()) ? 0 : 1)}還有 ${n} 場表演、音樂會</b>
+        <div class="small muted">想看表演的話，夜遊頁可以直接排「晚餐＋表演」</div>
+        <div class="row"><button class="btn" data-tab="night">去看看 →</button></div></div>`);
+    }
+  }
 }
 
 // ---------- 卡片 ----------
@@ -276,6 +287,11 @@ function openRoute(id, push = true) {
     </div>
     <ol class="timeline" id="tl">${renderTimeline(r, r.depart)}</ol>
     ${evs.length ? `<h3 class="sec">🖼️ 順路展覽</h3>${evs.map(eventCard).join("")}` : ""}
+    ${isNight(r) ? (() => {
+      const pt = r.steps.find((x) => x.lat);
+      const near = pt ? state.spots.filter((sp) => r.steps.some((x) => x.lat && kmBetween(x, sp) <= 2)) : [];
+      return near.length ? `<h3 class="sec">🍷 附近晚上還開的店</h3>${near.map(spotCard).join("")}` : "";
+    })() : ""}
     ${r.tips?.length ? `<h3 class="sec">💡 小提醒</h3><ul class="tips">${r.tips.map((t) => `<li>${esc(t)}</li>`).join("")}<li>店家營業時間可能會變，點「地圖・營業時間」確認</li></ul>` : ""}
     <h3 class="sec">📒 紀錄</h3>
     ${visits.length ? visits.map((v) => `<div class="card"><b>${v.date}</b> ${esc(v.rating || "")}<div class="small">${esc(v.note || "")}</div></div>`).join("") : `<p class="muted small">還沒去過</p>`}
@@ -403,8 +419,10 @@ function closeRoute() {
 function openFromHash() {
   const r = location.hash.match(/^#r\/(\w+)/);
   const e = location.hash.match(/^#e\/(.+)/);
+  const s = location.hash.match(/^#s\/(.+)/);
   if (r) openRoute(r[1], false);
   else if (e) openPlan(decodeURIComponent(e[1]), false);
+  else if (s) openShowPlan(decodeURIComponent(s[1]), false);
   else closeRoute();
 }
 window.addEventListener("popstate", () => {
@@ -478,19 +496,188 @@ function renderLog() {
   $("#freeLog").href = logUrl("", "");
 }
 
+// ---------- 夜遊：表演、晚上還開的展覽、吃喝逛 ----------
+const DINNER_KINDS = ["餐酒館", "餐廳", "居酒屋"];
+const AFTER_KINDS = ["酒吧", "書店", "小店"];
+const dowOf = (iso) => new Date(iso + "T00:00:00").getDay();
+const showHidden = (s) => isHidden(`s:${s.title}`);
+const hhmmToMin = (s) => toMin(s);
+
+// 日期選項：今晚，加上 7 天內的週五、六、日
+function nightDays() {
+  const out = [];
+  for (let i = 0; i < 8; i++) {
+    const d = today(); d.setDate(d.getDate() + i);
+    if (i === 0 || [5, 6, 0].includes(d.getDay())) out.push(ymd(d));
+  }
+  return out;
+}
+const dayLabel = (iso, i) => (i === 0 && iso === ymd(new Date()) ? "今晚" : `週${WEEK[dowOf(iso)]} ${iso.slice(5).replace("-", "/")}`);
+
+const spotOpen = (sp, iso) => !(sp.closed || []).includes(dowOf(iso));
+function spotsNear(pt, kinds, iso, maxKm = 3) {
+  if (!pt?.lat) return [];
+  return state.spots.filter((sp) => kinds.includes(sp.kind) && spotOpen(sp, iso) && kmBetween(pt, sp) <= maxKm)
+    .sort((a, b) => kmBetween(pt, a) - kmBetween(pt, b));
+}
+// 表演場地的座標：資料有就用，沒有就看是不是已知場館
+function showPoint(s) {
+  if (s.lat) return s;
+  const v = findVenue({ place: s.place, address: s.address, lat: null });
+  return v || null;
+}
+
+function showCard(s) {
+  return `<div class="card">
+    <div class="meta"><span class="badge">${s.times.join("、")} 開演</span><span class="tag" style="margin:0">${esc(s.cat)}</span></div>
+    <h3 style="margin-top:4px">${esc(s.title)}</h3>
+    <div class="meta"><span>📍 ${esc(s.place)}</span>${s.min ? `<span>🚗 約 ${s.min} 分</span>` : ""}</div>
+    ${s.price ? `<div class="meta" style="margin-top:2px">🎟️ ${esc(s.price)}</div>` : ""}
+    <button class="btn primary" style="display:block;width:100%;margin-top:10px" data-show="${esc(s.id)}">🌙 排成夜遊（晚餐＋表演）</button>
+    <div class="row">
+      <a class="btn" href="${esc(s.url || "https://www.google.com/search?q=" + enc(s.title))}" target="_blank" rel="noopener">售票・資訊</a>
+      <a class="btn" href="${navUrl(s.address || s.place)}" target="_blank" rel="noopener">導航</a>
+      ${showHidden(s) ? `<button class="btn" data-unhide="s:${esc(s.title)}">恢復</button>` : `<button class="btn" data-hide="s:${esc(s.title)}">🙈 不想去</button>`}
+    </div>
+  </div>`;
+}
+
+function spotCard(sp) {
+  return `<div class="card">
+    <div class="meta"><span class="tag" style="margin:0">${esc(sp.kind)}</span><span>${esc(sp.area)}</span><span>約 ${sp.open}–${sp.close > "24:00" ? "凌晨 " + fmt(toMin(sp.close)) : sp.close}</span></div>
+    <h3 style="margin-top:4px">${esc(sp.name)}</h3>
+    <div class="small">${esc(sp.detail)}</div>
+    <div class="row">
+      <a class="btn" href="${navUrl(sp.q)}" target="_blank" rel="noopener">導航</a>
+      <a class="btn" href="${searchUrl(sp.q)}" target="_blank" rel="noopener">地圖・營業時間</a>
+    </div>
+  </div>`;
+}
+
+function renderNight() {
+  const days = nightDays();
+  if (!state.nightDate || !days.includes(state.nightDate)) {
+    state.nightDate = new Date().getHours() >= 20 ? days[1] || days[0] : days[0];
+  }
+  const iso = state.nightDate;
+  $("#nightDays").innerHTML = days.map((d, i) => `<button class="${d === iso ? "on" : ""}" data-nd="${d}">${dayLabel(d, i)}</button>`).join("");
+
+  const shows = state.shows.filter((s) => s.date === iso && !showHidden(s));
+  const list = state.showAll ? shows : shows.slice(0, 8);
+  $("#showList").innerHTML = (list.map(showCard).join("") || `<p class="muted small">這晚沒有查到 5 點以後的表演</p>`)
+    + (shows.length > list.length ? `<button class="btn" style="width:100%" data-more="1">再看 ${shows.length - list.length} 場</button>` : "");
+
+  // 晚上 7 點以後還開的展覽（資料裡有寫關門時間的才算得出來）
+  const late = state.events.filter((e) => e.close && e.close >= "19:00" && e.start <= iso && e.end >= iso && !eventHidden(e));
+  $("#nightExhibits").innerHTML = late.length ? `<h2 class="sec">🖼️ 晚上還開的展覽</h2>${late.map(eventCard).join("")}` : "";
+
+  const filters = ["全部", "吃晚餐", "酒吧", "書店・小店"];
+  const f = state.spotFilter || "全部";
+  $("#spotChips").innerHTML = filters.map((x) => `<button class="${x === f ? "on" : ""}" data-sf="${x}">${x}</button>`).join("");
+  const spots = state.spots.filter((sp) => spotOpen(sp, iso) && (f === "全部"
+    || (f === "吃晚餐" && DINNER_KINDS.includes(sp.kind)) || (f === "酒吧" && sp.kind === "酒吧")
+    || (f === "書店・小店" && ["書店", "小店"].includes(sp.kind))));
+  $("#spotList").innerHTML = spots.map(spotCard).join("") || `<p class="muted small">這晚沒有符合的店（可能剛好公休）</p>`;
+}
+
+// 晚餐候選：附近晚上有開的餐酒館／餐廳，再加上附近場館周邊有賣晚餐的在地店
+function dinnerOptions(pt, iso, eatBy) {
+  const opts = spotsNear(pt, DINNER_KINDS, iso)
+    .filter((sp) => toMin(sp.open) <= eatBy - 105)
+    .map((sp) => ({ name: sp.name, q: sp.q, stay: 75, detail: sp.detail, lat: sp.lat, lng: sp.lng }));
+  const v = pt && state.venues.find((x) => kmBetween(x, pt) <= 2);
+  for (const f of (v && state.foods[v.food]) || []) {
+    if (f.meals.includes("晚餐")) opts.push({ name: f.name, q: f.q, stay: Math.max(f.stay, 45), detail: f.detail, far: f.drive });
+  }
+  return opts;
+}
+
+function buildShowPlan(s, time, sel) {
+  const pt = showPoint(s);
+  const start = toMin(time);
+  const drive0 = s.min ?? (pt ? Math.round(5 + kmBetween(HOME, pt) * 1.6) : 40);
+  const opts = dinnerOptions(pt, s.date, start);
+  const pick = opts.length ? [...opts.filter((o) => !ate(o.name)), ...opts.filter((o) => ate(o.name))][sel.eat % opts.length] : null;
+  const toShow = pick ? (pick.far || (pick.lat && pt && kmBetween(pick, pt) > 0.8 ? 10 : 0)) : 0;
+  const dinner = pick
+    ? { kind: "eat", title: `晚餐：${pick.name}`, name: pick.name, q: pick.q, drive: drive0, stay: pick.stay,
+        detail: pick.detail + (ate(pick.name) ? "（之前吃過）" : ""), swap: "eat" }
+    : { kind: "eat", title: "晚餐：附近找吃的", q: `${s.place} 附近 餐廳`, drive: drive0, stay: 60,
+        detail: "這個場地附近還沒整理過晚上的店，先用地圖找評價高、不是連鎖的店。" };
+  const show = { kind: "see", title: `${time} 開演：${s.title}`, name: s.title, q: s.address || s.place, drive: toShow, stay: 15 + 120,
+    detail: `📍 ${s.place}｜提早 15 分鐘進場，演出長度先抓 2 小時（以售票頁為準）。${s.price ? "🎟️ " + s.price : ""}` };
+  const steps = [dinner, show];
+  const end = start + 120;
+  // 散場後還開著的酒吧或小店（回到家不超過 23:30 才排）
+  const after = spotsNear(pt, AFTER_KINDS, s.date, 2).filter((sp) => toMin(sp.close) >= end + 45 || sp.close > "24:00");
+  if (after.length && end + 45 + drive0 <= 23 * 60 + 30) {
+    const a = after[sel.after % after.length];
+    steps.push({ kind: a.kind === "酒吧" ? "fun" : "shop", title: `散場後（選擇）：${a.name}`, name: a.name, q: a.q, drive: 0, stay: 45,
+      detail: a.detail, swap: "after" });
+  }
+  const departMin = start - 15 - toShow - dinner.stay - drive0;
+  return { drive: drive0, steps, depart: fmt(Math.floor(departMin / 5) * 5) };
+}
+
+function openShowPlan(id, push = true) {
+  const s = state.shows.find((x) => x.id === id);
+  if (!s) return;
+  if (push) history.pushState({ id }, "", `#s/${enc(id)}`);
+  const sel = { eat: 0, after: 0, time: s.times[0] };
+  const el = $("#detail");
+  el.innerHTML = `<div class="sheet-in">
+    <div class="close"><button id="closeBtn">← 返回</button><span class="muted small">${esc(s.place)}</span></div>
+    <h2 style="margin:4px 0">🎭 ${esc(s.title)}</h2>
+    <div class="meta"><span>${esc(s.cat)}</span><span>${s.date.slice(5).replace("-", "/")}（週${WEEK[dowOf(s.date)]}）</span>
+      <a href="${esc(s.url || "https://www.google.com/search?q=" + enc(s.title))}" target="_blank" rel="noopener">售票・資訊</a></div>
+    ${s.times.length > 1 ? `<div class="depart">場次 <select id="showTime">${s.times.map((t) => `<option>${t}</option>`).join("")}</select></div>` : ""}
+    <p class="small muted" style="margin:8px 0 0">記得先買票。時間表是從開演時間往回推算出發時間。</p>
+    <div class="depart" id="departTip"></div>
+    <a class="btn primary" style="display:block" id="planNav" target="_blank" rel="noopener">🚗 整條路線一鍵導航</a>
+    <ol class="timeline" id="tl" style="margin-top:14px"></ol>
+    <h3 class="sec">💡 小提醒</h3>
+    <ul class="tips"><li>按「🔄 換一家」可以換晚餐或散場後的去處</li><li>店家營業時間是從文章查的，點「地圖・營業時間」確認</li></ul>
+    <a class="btn" style="display:block" id="planLog" target="_blank" rel="noopener">✅ 我們去了，記錄一下</a>
+  </div>`;
+  el.hidden = false;
+  el.scrollTop = 0;
+  document.body.style.overflow = "hidden";
+  const draw = () => {
+    const plan = buildShowPlan(s, sel.time, sel);
+    $("#departTip").innerHTML = `建議 <b style="font-size:20px">${plan.depart}</b> 從樹林出發`;
+    $("#tl").innerHTML = renderTimeline(plan, plan.depart);
+    $("#planNav").href = fullRouteUrl(plan);
+    $("#planLog").href = logUrl("", "表演：" + s.title, "排的行程：" + plan.steps.map((x) => x.name || x.title).join(" → "));
+  };
+  $("#closeBtn").onclick = () => history.back();
+  if ($("#showTime")) $("#showTime").onchange = (ev) => { sel.time = ev.target.value; draw(); };
+  $("#tl").onclick = (ev) => {
+    const b = ev.target.closest("[data-swap]");
+    if (!b) return;
+    ev.preventDefault();
+    sel[b.dataset.swap]++;
+    draw();
+  };
+  draw();
+}
+
 // ---------- 事件 ----------
 function renderAll() {
-  renderRoutes(); renderEvents(); renderEndingSoon(); renderLog();
+  renderRoutes(); renderEvents(); renderEndingSoon(); renderLog(); renderNight();
 }
 
 document.addEventListener("click", (ev) => {
-  const t = ev.target.closest("[data-tab],[data-open],[data-rf],[data-ef],[data-hide],[data-unhide],[data-plan]");
+  const t = ev.target.closest("[data-tab],[data-open],[data-rf],[data-ef],[data-hide],[data-unhide],[data-plan],[data-show],[data-nd],[data-sf],[data-more]");
   if (!t) return;
   if (t.dataset.hide) { ev.stopPropagation(); hide(t.dataset.hide); if (t.closest("#pickOut")) doPick(); return; }
   if (t.dataset.unhide) { unhide(t.dataset.unhide); return; }
   if (t.dataset.plan) { openPlan(t.dataset.plan); return; }
+  if (t.dataset.show) { openShowPlan(t.dataset.show); return; }
+  if (t.dataset.nd) { state.nightDate = t.dataset.nd; state.showAll = false; renderNight(); return; }
+  if (t.dataset.sf) { state.spotFilter = t.dataset.sf; renderNight(); return; }
+  if (t.dataset.more) { state.showAll = true; renderNight(); return; }
   if (t.dataset.tab) {
-    document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b === t));
+    document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t.dataset.tab));
     document.querySelectorAll(".tab").forEach((s) => s.classList.toggle("on", s.id === "tab-" + t.dataset.tab));
     window.scrollTo(0, 0);
   } else if (t.dataset.open) {
@@ -505,8 +692,8 @@ setPickMode(new Date().getHours() >= 15 ? "night" : "day");
 $("#evSearch").oninput = renderEvents;
 
 (async function init() {
-  const [routes, events, visited, skipped, venues] = await Promise.all([
-    getJson("data/routes.json"), getJson("data/events.json"), getJson("data/visited.json"), getJson("data/skipped.json"), getJson("data/venues.json"),
+  const [routes, events, visited, skipped, venues, shows, night] = await Promise.all([
+    getJson("data/routes.json"), getJson("data/events.json"), getJson("data/visited.json"), getJson("data/skipped.json"), getJson("data/venues.json"), getJson("data/shows.json"), getJson("data/night.json"),
   ]);
   state.routes = routes?.routes || [];
   state.events = events?.events || [];
@@ -514,8 +701,10 @@ $("#evSearch").oninput = renderEvents;
   state.skipped = skipped?.skips || [];
   state.venues = venues?.venues || [];
   state.foods = venues?.foods || {};
+  state.shows = shows?.shows || [];
+  state.spots = night?.spots || [];
   $("#evUpdated").textContent = events?.updated ? `展覽資料更新於 ${events.updated}（文化部藝文活動開放資料）` : "展覽資料暫時抓不到";
-  renderRoutes(); renderEvents(); renderEndingSoon(); renderLog();
+  renderRoutes(); renderEvents(); renderEndingSoon(); renderLog(); renderNight();
   await loadWeather();
   if (location.hash) openFromHash();
 })();

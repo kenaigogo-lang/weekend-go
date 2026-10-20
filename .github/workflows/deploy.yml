@@ -32,7 +32,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/data/events.json
+          git add docs/data/events.json docs/data/shows.json
           if ! git diff --cached --quiet; then
             git commit -m "更新展覽資料"
             git pull --rebase && git push

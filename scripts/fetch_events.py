@@ -96,8 +96,7 @@ def is_exhibition(e):
     return e.get("category") in {"15", "16", "200"} and "展" in e.get("title", "")
 
 
-def from_culture():
-    data = json.loads(fetch(SOURCE, timeout=120))
+def from_culture(data):
     out = []
     for e in data:
         if not is_exhibition(e):
@@ -123,13 +122,64 @@ def from_culture():
             continue
 
         info, km, c = best
-        out.append(make_event(
+        ev = make_event(
             e["UID"], e["title"], start, end,
             info.get("locationName") or "", info.get("location") or "", c,
             info.get("price") or "", e.get("sourceWebPromote") or e.get("webSales") or "",
             e.get("showUnit") or "", e.get("descriptionFilterHtml") or "",
-        ))
+        )
+        # endTime 的時刻通常就是每天關門時間，夜遊頁用來找晚上還開的展覽
+        m = re.search(r" (\d\d:\d\d)", info.get("endTime") or "")
+        if m and m.group(1) != "00:00":
+            ev["close"] = m.group(1)
+        out.append(ev)
     print(f"文化部: kept {len(out)} of {len(data)} events")
+    return out
+
+
+SHOW_CATS = {"1": "音樂", "2": "戲劇", "3": "舞蹈", "5": "獨立音樂", "11": "綜藝", "17": "演唱會"}
+SHOWS_OUT = OUT.parent / "shows.json"
+
+
+def from_shows(data):
+    """晚上 5 點以後開演的表演場次（兩週內），夜遊頁用。同一檔同一天只留一筆，時間合併。"""
+    sessions = {}
+    for e in data:
+        cat = SHOW_CATS.get(e.get("category"))
+        if not cat:
+            continue
+        for info in e.get("showInfo") or []:
+            text = (info.get("location") or "") + (info.get("locationName") or "")
+            if not AREA.search(text) or "線上" in text:
+                continue
+            try:
+                t = datetime.strptime(info["time"], "%Y/%m/%d %H:%M:%S")
+            except (KeyError, ValueError):
+                continue
+            if not (TODAY <= t.date() <= SOON) or t.hour < 17:
+                continue
+            key = (e["UID"], t.date())
+            if key in sessions:
+                sessions[key]["times"] = sorted(set(sessions[key]["times"] + [t.strftime("%H:%M")]))
+                continue
+            c = coords(info)
+            km = km_between(ORIGIN, c) if c else None
+            sessions[key] = {
+                "id": f"{e['UID']}-{t:%m%d}",
+                "title": e["title"].strip(),
+                "cat": cat,
+                "date": t.date().isoformat(),
+                "times": [t.strftime("%H:%M")],
+                "place": (info.get("locationName") or "").strip(),
+                "address": (info.get("location") or "").strip(),
+                "lat": c[0] if c else None,
+                "lng": c[1] if c else None,
+                "min": round(5 + km * 1.6) if km is not None else None,
+                "price": (info.get("price") or "").strip()[:80],
+                "url": e.get("webSales") or e.get("sourceWebPromote") or "",
+            }
+    out = sorted(sessions.values(), key=lambda s: (s["date"], s["times"][0]))
+    print(f"表演: {len(out)} 場（17:00 以後、兩週內）")
     return out
 
 
@@ -293,7 +343,12 @@ def is_dup(title, keys):
 
 
 def main():
-    out = from_culture()
+    data = json.loads(fetch(SOURCE, timeout=120))
+    SHOWS_OUT.write_text(json.dumps({
+        "updated": datetime.now(TW).strftime("%Y-%m-%d %H:%M"),
+        "shows": from_shows(data),
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
+    out = from_culture(data)
     keys = [title_key(e["title"]) for e in out]
     for name, scrape in [("華山", huashan), ("松菸", songshan), ("北美館", tfam),
                          ("中正紀念堂", cksmh), ("新北市美術館", ntcam)]:
