@@ -192,7 +192,7 @@ def songshan():
             m_desc = re.search(r'class="article">(.*?)</p>', row, re.S)
             desc = text_of(m_desc.group(1)) if m_desc else ""
             # 松菸「展演資訊」混著市集、論壇、表演，只留標題看起來是展覽的
-            if not re.search(r"展|博覽", title):
+            if not re.search(r"展|博覽", title) or "攻略" in title:
                 continue
             start, end = (date.fromisoformat(m_date.group(i)) for i in (1, 2))
             if in_window(start, end):
