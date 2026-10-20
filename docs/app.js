@@ -71,9 +71,20 @@ async function loadWeather() {
 function lastVisit(id) {
   return state.visited.filter((v) => v.route === id).sort((a, b) => b.date.localeCompare(a.date))[0];
 }
+// 去過的路線，以及那些路線裡的每個地點、記錄過的展覽，都不再推薦
+function visitedSets() {
+  const routes = new Set(state.visited.map((v) => v.route).filter(Boolean));
+  const places = new Set();
+  for (const r of state.routes) if (routes.has(r.id)) r.steps.forEach((s) => places.add(s.q));
+  const events = new Set(state.visited.filter((v) => !v.route).map((v) => v.title.replace(/^展覽：/, "").trim()));
+  return { routes, places, events };
+}
+const eventSeen = (e) => visitedSets().events.has(e.title);
+const seenPlaces = (r) => { const { places } = visitedSets(); return r.steps.filter((s) => places.has(s.q)); };
+
 function nearbyEvents(route, maxKm = 3) {
   const spots = route.steps.filter((s) => s.lat);
-  return state.events.filter((e) => e.lat && daysUntil(e.start) <= 0 && spots.some((s) => kmBetween(s, e) <= maxKm))
+  return state.events.filter((e) => e.lat && !eventSeen(e) && daysUntil(e.start) <= 0 && spots.some((s) => kmBetween(s, e) <= maxKm))
     .sort((a, b) => a.permanent - b.permanent || a.end.localeCompare(b.end));
 }
 const rainOk = (r) => r.tags.some((t) => RAIN_OK.includes(t));
@@ -82,12 +93,9 @@ function scoreRoute(r) {
   const rain = state.weather?.target.rain;
   const why = [];
   let s = Math.random() * 10;
-  const lv = lastVisit(r.id);
-  if (lv) {
-    const ago = -daysUntil(lv.date);
-    if (/不推/.test(lv.rating || "")) s -= 200;
-    if (ago < 120) s -= 100; else { s -= 20; why.push(`上次去是 ${lv.date}`); }
-  } else why.push("還沒去過");
+  const seen = seenPlaces(r);
+  if (seen.length) { s -= 30; why.push(`有 ${seen.length} 個點去過了`); }
+  else why.push("全部沒去過");
   if (rain && !rainOk(r)) s -= 40;
   if (rain && rainOk(r)) why.unshift("可能下雨，選了室內的路線");
   if (!rain && r.tags.includes("戶外")) { s += 4; why.unshift("天氣不錯，適合出門"); }
@@ -99,8 +107,13 @@ function scoreRoute(r) {
 
 function doPick() {
   if (!state.pickOrder.length || state.pickIdx >= state.pickOrder.length) {
-    state.pickOrder = state.routes.map(scoreRoute).sort((a, b) => b.s - a.s);
+    const done = visitedSets().routes;
+    state.pickOrder = state.routes.filter((r) => !done.has(r.id)).map(scoreRoute).sort((a, b) => b.s - a.s);
     state.pickIdx = 0;
+  }
+  if (!state.pickOrder.length) {
+    $("#pickOut").innerHTML = `<div class="card">清單上的路線全部都去過了 🎉 跟 Claude 說一聲，請它再整理一批新路線。</div>`;
+    return;
   }
   const { r, why } = state.pickOrder[state.pickIdx++];
   $("#pickOut").innerHTML = `
@@ -121,16 +134,18 @@ function doPick() {
 // ---------- 卡片 ----------
 function routeCard(r) {
   const lv = lastVisit(r.id);
+  const seen = lv ? [] : seenPlaces(r);
   return `<div class="card click" data-open="${r.id}">
     <h3>${r.emoji} ${esc(r.name)}</h3>
-    <div class="meta"><span>🚗 約 ${r.drive} 分</span><span>${esc(r.area)}</span>${lv ? `<span class="visited">✓ 去過 ${lv.date}</span>` : ""}</div>
+    <div class="meta"><span>🚗 約 ${r.drive} 分</span><span>${esc(r.area)}</span>${lv ? `<span class="visited">✓ 去過 ${lv.date}</span>` : ""}${seen.length ? `<span class="badge">含去過的點：${esc(seen.map((s) => s.title).join("、"))}</span>` : ""}</div>
     <div>${r.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>
   </div>`;
 }
 
 function eventCard(e) {
   const left = daysUntil(e.end), notYet = daysUntil(e.start);
-  const badge = notYet > 0 ? `<span class="badge">${notYet} 天後開展</span>`
+  const badge = eventSeen(e) ? `<span class="visited">✓ 看過了</span>`
+    : notYet > 0 ? `<span class="badge">${notYet} 天後開展</span>`
     : !e.permanent && left <= 14 ? `<span class="badge">剩 ${left} 天</span>` : "";
   const dest = e.address || e.place;
   return `<div class="card">
@@ -223,16 +238,20 @@ window.addEventListener("popstate", () => {
 
 // ---------- 列表 ----------
 function renderRoutes() {
-  const filters = ["全部", "看展", "美食", "雨天OK", "近", "夕陽", "沒去過"];
+  // 去過的路線預設藏起來，要看就點「✓ 去過的」
+  const filters = ["全部", "看展", "美食", "雨天OK", "近", "夕陽", "✓ 去過的"];
   $("#routeChips").innerHTML = filters.map((f) => `<button class="${f === state.routeFilter ? "on" : ""}" data-rf="${f}">${f}</button>`).join("");
+  const done = visitedSets().routes;
+  const f = state.routeFilter;
   const list = state.routes.filter((r) => {
-    const f = state.routeFilter;
+    if (f === "✓ 去過的") return done.has(r.id);
+    if (done.has(r.id)) return false;
     if (f === "全部") return true;
-    if (f === "沒去過") return !lastVisit(r.id);
     if (f === "雨天OK") return rainOk(r);
     return r.tags.includes(f);
-  }).sort((a, b) => a.drive - b.drive);
-  $("#routeList").innerHTML = list.map(routeCard).join("") || `<div class="empty">沒有符合的路線</div>`;
+  }).sort((a, b) => seenPlaces(a).length - seenPlaces(b).length || a.drive - b.drive);
+  $("#routeList").innerHTML = list.map(routeCard).join("")
+    || `<div class="empty">${f === "✓ 去過的" ? "還沒有去過的路線" : "沒有符合的路線"}</div>`;
 }
 
 function renderEvents() {
@@ -253,7 +272,7 @@ function renderEvents() {
 }
 
 function renderEndingSoon() {
-  const list = state.events.filter((e) => !e.permanent && daysUntil(e.start) <= 0 && daysUntil(e.end) <= 21)
+  const list = state.events.filter((e) => !e.permanent && !eventSeen(e) && daysUntil(e.start) <= 0 && daysUntil(e.end) <= 21)
     .sort((a, b) => a.end.localeCompare(b.end)).slice(0, 3);
   $("#endingSoon").innerHTML = list.map(eventCard).join("") || `<p class="muted small">最近沒有快結束的展覽</p>`;
 }
