@@ -587,7 +587,7 @@ function dinnerOptions(pt, iso, from, to) {
   const opts = spotsNear(pt, DINNER_KINDS, iso)
     .filter((sp) => toMin(sp.open) <= from && toMin(sp.close) >= to)
     .map((sp) => ({ name: sp.name, q: sp.q, stay: 75, detail: sp.detail, km: kmBetween(pt, sp) }));
-  const v = state.venues.find((x) => kmBetween(x, pt) <= 2);
+  const v = state.venues.filter((x) => kmBetween(x, pt) <= 2).sort((a, b) => kmBetween(a, pt) - kmBetween(b, pt))[0];
   for (const f of (v && state.foods[v.food]) || []) {
     if (f.meals.includes("晚餐")) {
       opts.push({ name: f.name, q: f.q, stay: Math.max(f.stay, 45), detail: f.detail, km: kmBetween(v, pt) + (f.drive || 0) / 4 });
