@@ -240,7 +240,7 @@ function eventCard(e) {
 // ---------- 行程詳情 ----------
 function toMin(hhmm) { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; }
 function fmt(min) { min = ((min % 1440) + 1440) % 1440; return `${pad(Math.floor(min / 60))}:${pad(min % 60)}`; }
-const KIND = { see: "🖼️", eat: "🍜", walk: "🚶", view: "🌄", fun: "✨", shop: "🛍️" };
+const KIND = { see: "🖼️", show: "🎭", eat: "🍜", walk: "🚶", view: "🌄", fun: "✨", shop: "🛍️" };
 
 function renderTimeline(r, start) {
   let t = toMin(start);
@@ -581,41 +581,61 @@ function renderNight() {
 }
 
 // 晚餐候選：附近晚上有開的餐酒館／餐廳，再加上附近場館周邊有賣晚餐的在地店
-function dinnerOptions(pt, iso, eatBy) {
+// 依離場地的距離排序，近的先；要在 from–to 這段時間都有開
+function dinnerOptions(pt, iso, from, to) {
+  if (!pt) return [];
   const opts = spotsNear(pt, DINNER_KINDS, iso)
-    .filter((sp) => toMin(sp.open) <= eatBy - 105)
-    .map((sp) => ({ name: sp.name, q: sp.q, stay: 75, detail: sp.detail, lat: sp.lat, lng: sp.lng }));
-  const v = pt && state.venues.find((x) => kmBetween(x, pt) <= 2);
+    .filter((sp) => toMin(sp.open) <= from && toMin(sp.close) >= to)
+    .map((sp) => ({ name: sp.name, q: sp.q, stay: 75, detail: sp.detail, km: kmBetween(pt, sp) }));
+  const v = state.venues.find((x) => kmBetween(x, pt) <= 2);
   for (const f of (v && state.foods[v.food]) || []) {
-    if (f.meals.includes("晚餐")) opts.push({ name: f.name, q: f.q, stay: Math.max(f.stay, 45), detail: f.detail, far: f.drive });
+    if (f.meals.includes("晚餐")) {
+      opts.push({ name: f.name, q: f.q, stay: Math.max(f.stay, 45), detail: f.detail, km: kmBetween(v, pt) + (f.drive || 0) / 4 });
+    }
   }
-  return opts;
+  return opts.sort((a, b) => a.km - b.km);
+}
+function dinnerStep(opts, sel, s, drive) {
+  const list = [...opts.filter((o) => !ate(o.name)), ...opts.filter((o) => ate(o.name))];
+  const pick = list.length ? list[sel.eat % list.length] : null;
+  if (!pick) {
+    return { kind: "eat", title: "晚餐：附近找吃的", q: `${s.place} 附近 餐廳`, drive, stay: 60,
+      detail: "這個場地附近還沒整理過晚上的店，先用地圖找評價高、不是連鎖的店。" };
+  }
+  return { kind: "eat", title: `晚餐：${pick.name}`, name: pick.name, q: pick.q, stay: pick.stay, swap: "eat",
+    drive: drive + (pick.km > 0.8 ? 10 : 0), detail: pick.detail + (ate(pick.name) ? "（之前吃過）" : "") };
 }
 
+// 18:30 以後開演：先吃晚餐再看；比較早開演：先看，散場再吃
 function buildShowPlan(s, time, sel) {
   const pt = showPoint(s);
   const start = toMin(time);
-  const drive0 = s.min ?? (pt ? Math.round(5 + kmBetween(HOME, pt) * 1.6) : 40);
-  const opts = dinnerOptions(pt, s.date, start);
-  const pick = opts.length ? [...opts.filter((o) => !ate(o.name)), ...opts.filter((o) => ate(o.name))][sel.eat % opts.length] : null;
-  const toShow = pick ? (pick.far || (pick.lat && pt && kmBetween(pick, pt) > 0.8 ? 10 : 0)) : 0;
-  const dinner = pick
-    ? { kind: "eat", title: `晚餐：${pick.name}`, name: pick.name, q: pick.q, drive: drive0, stay: pick.stay,
-        detail: pick.detail + (ate(pick.name) ? "（之前吃過）" : ""), swap: "eat" }
-    : { kind: "eat", title: "晚餐：附近找吃的", q: `${s.place} 附近 餐廳`, drive: drive0, stay: 60,
-        detail: "這個場地附近還沒整理過晚上的店，先用地圖找評價高、不是連鎖的店。" };
-  const show = { kind: "see", title: `${time} 開演：${s.title}`, name: s.title, q: s.address || s.place, drive: toShow, stay: 15 + 120,
-    detail: `📍 ${s.place}｜提早 15 分鐘進場，演出長度先抓 2 小時（以售票頁為準）。${s.price ? "🎟️ " + s.price : ""}` };
-  const steps = [dinner, show];
   const end = start + 120;
+  const drive0 = s.min ?? (pt ? Math.round(5 + kmBetween(HOME, pt) * 1.6) : 40);
+  const show = { kind: "show", title: `${time} 開演：${s.title}`, name: s.title, q: s.address || s.place, drive: drive0, stay: 15 + 120,
+    detail: `📍 ${s.place}｜提早 15 分鐘進場，演出長度先抓 2 小時（以售票頁為準）。${s.price ? "🎟️ " + s.price : ""}` };
+  const early = start < 18 * 60 + 30;
+  let steps, departMin;
+  if (early) {
+    const dinner = dinnerStep(dinnerOptions(pt, s.date, end + 10, end + 85), sel, s, 0);
+    steps = [show, dinner];
+    departMin = start - 15 - drive0;
+  } else {
+    const dinner = dinnerStep(dinnerOptions(pt, s.date, start - 105, start - 25), sel, s, drive0);
+    const toShow = dinner.drive - drive0;
+    dinner.drive = drive0;
+    show.drive = toShow;
+    steps = [dinner, show];
+    departMin = start - 15 - toShow - dinner.stay - drive0;
+  }
   // 散場後還開著的酒吧或小店（回到家不超過 23:30 才排）
-  const after = spotsNear(pt, AFTER_KINDS, s.date, 2).filter((sp) => toMin(sp.close) >= end + 45 || sp.close > "24:00");
-  if (after.length && end + 45 + drive0 <= 23 * 60 + 30) {
+  const free = early ? end + 10 + steps[1].drive + steps[1].stay : end;
+  const after = spotsNear(pt, AFTER_KINDS, s.date, 2).filter((sp) => toMin(sp.close) >= free + 45);
+  if (after.length && free + 45 + drive0 <= 23 * 60 + 30) {
     const a = after[sel.after % after.length];
     steps.push({ kind: a.kind === "酒吧" ? "fun" : "shop", title: `散場後（選擇）：${a.name}`, name: a.name, q: a.q, drive: 0, stay: 45,
       detail: a.detail, swap: "after" });
   }
-  const departMin = start - 15 - toShow - dinner.stay - drive0;
   return { drive: drive0, steps, depart: fmt(Math.floor(departMin / 5) * 5) };
 }
 
