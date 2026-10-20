@@ -301,8 +301,11 @@ function choose(list, idx, fits) {
   return c.length ? c[idx % c.length] : null;
 }
 function eatStep(venue, e, meal, idx, drive) {
-  // 點心時段什麼都可以吃；正餐時段只挑有供應那一餐的店
-  const f = venue && choose(state.foods[venue.food] || [], idx, (x) => meal === "點心" || x.meals.includes(meal));
+  // 先排有供應這一餐的店；點心時段再接著排其他店（只賣早餐的不排）
+  const foods = venue ? state.foods[venue.food] || [] : [];
+  const fit = foods.filter((x) => x.meals.includes(meal));
+  const extra = meal === "點心" ? foods.filter((x) => !fit.includes(x) && x.meals.some((m) => m !== "早餐")) : [];
+  const f = choose(fit.concat(extra), idx, () => true);
   if (!f) {
     return { kind: "eat", title: `${meal}：附近找吃的`, q: `${e.place} 附近 小吃`, drive, stay: 50,
       detail: "這個場館附近還沒整理過在地老店，先用地圖找評價高、不是連鎖的店。想固定推薦的話，跟 Claude 說一聲。" };
