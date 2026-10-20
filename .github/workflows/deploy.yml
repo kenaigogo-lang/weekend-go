@@ -38,6 +38,9 @@ jobs:
             git pull --rebase && git push
           fi
 
+      - name: 加版本號，避免手機一直用舊的 app.js
+        run: sed -i "s/app.js\"/app.js?v=${GITHUB_SHA::7}\"/; s/style.css\"/style.css?v=${GITHUB_SHA::7}\"/" docs/index.html
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
