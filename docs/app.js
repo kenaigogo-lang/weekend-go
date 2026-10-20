@@ -2,7 +2,7 @@ const REPO = "kenaigogo-lang/weekend-go";
 const HOME = { name: "樹林車站", lat: 24.9906, lng: 121.4246 };
 const RAIN_OK = ["雨天OK", "室內"];
 
-const state = { routes: [], events: [], visited: [], skipped: [], venues: [], foods: {}, weather: null, pickOrder: [], pickIdx: 0, routeFilter: "全部", evFilter: "全部" };
+const state = { routes: [], events: [], visited: [], skipped: [], venues: [], foods: {}, weather: null, pickOrder: [], pickIdx: 0, pickMode: "day", routeFilter: { day: "全部", night: "全部" }, evFilter: "全部" };
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -142,17 +142,31 @@ function scoreRoute(r) {
   else why.push("全部沒去過");
   if (rain && !rainOk(r)) s -= 40;
   if (rain && rainOk(r)) why.unshift("可能下雨，選了室內的路線");
-  if (!rain && r.tags.includes("戶外")) { s += 4; why.unshift("天氣不錯，適合出門"); }
+  if (!rain && (r.tags.includes("戶外") || r.tags.includes("夜景"))) { s += 4; why.unshift("天氣不錯，適合出門"); }
   const ev = nearbyEvents(r).find((e) => !e.permanent && daysUntil(e.end) <= 21);
   if (ev) { s += 8; why.push(`順路展覽「${ev.title}」再 ${daysUntil(ev.end)} 天就結束`); }
   if (r.tags.includes("稍遠")) s -= 5;
   return { r, s, why };
 }
 
+// 白天半日遊 / 晚上夜遊（type: "night"）；有 season 的路線只在那幾個月出現
+const isNight = (r) => r.type === "night";
+const inSeason = (r) => !r.season || r.season.includes(new Date().getMonth() + 1);
+
+function setPickMode(mode) {
+  state.pickMode = mode;
+  state.pickOrder = [];
+  document.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  $("#pickOut").innerHTML = "";
+  $("#pickBtn").textContent = mode === "night" ? "🌙 今晚去哪？" : "🎲 這次去哪？";
+}
+
 function doPick() {
   if (!state.pickOrder.length || state.pickIdx >= state.pickOrder.length) {
     const done = visitedSets().routes;
-    state.pickOrder = state.routes.filter((r) => !done.has(r.id) && !routeHidden(r)).map(scoreRoute).sort((a, b) => b.s - a.s);
+    const night = state.pickMode === "night";
+    state.pickOrder = state.routes.filter((r) => isNight(r) === night && inSeason(r) && !done.has(r.id) && !routeHidden(r))
+      .map(scoreRoute).sort((a, b) => b.s - a.s);
     state.pickIdx = 0;
   }
   if (!state.pickOrder.length) {
@@ -182,7 +196,7 @@ function routeCard(r) {
   const seen = lv ? [] : seenPlaces(r);
   return `<div class="card click" data-open="${r.id}">
     <h3>${r.emoji} ${esc(r.name)}</h3>
-    <div class="meta"><span>🚗 約 ${r.drive} 分</span><span>${esc(r.area)}</span>${lv ? `<span class="visited">✓ 去過 ${lv.date}</span>` : ""}${seen.length ? `<span class="badge">含去過的點：${esc(seen.map((s) => s.title).join("、"))}</span>` : ""}</div>
+    <div class="meta"><span>🚗 約 ${r.drive} 分</span><span>${esc(r.area)}</span>${isNight(r) ? `<span>${r.depart} 出發</span>` : ""}${r.season && !inSeason(r) ? `<span class="badge">只在 ${r.season.join("、")} 月推薦</span>` : ""}${lv ? `<span class="visited">✓ 去過 ${lv.date}</span>` : ""}${seen.length ? `<span class="badge">含去過的點：${esc(seen.map((s) => s.title).join("、"))}</span>` : ""}</div>
     <div>${r.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>
   </div>`;
 }
@@ -398,22 +412,31 @@ window.addEventListener("popstate", () => {
 });
 
 // ---------- 列表 ----------
+const ROUTE_TABS = {
+  day: { chips: "#routeChips", list: "#routeList", filters: ["全部", "看展", "美食", "雨天OK", "近", "夕陽"] },
+  night: { chips: "#nightChips", list: "#nightList", filters: ["全部", "夜市", "夜景", "近", "雨天OK", "季節限定"] },
+};
 function renderRoutes() {
-  // 去過的路線預設藏起來，要看就點「✓ 去過的」
-  const filters = ["全部", "看展", "美食", "雨天OK", "近", "夕陽", "✓ 去過的", "🙈 不想去的"];
-  $("#routeChips").innerHTML = filters.map((f) => `<button class="${f === state.routeFilter ? "on" : ""}" data-rf="${f}">${f}</button>`).join("");
-  const done = visitedSets().routes;
-  const f = state.routeFilter;
-  const list = state.routes.filter((r) => {
-    if (f === "✓ 去過的") return done.has(r.id);
-    if (f === "🙈 不想去的") return routeHidden(r);
-    if (done.has(r.id) || routeHidden(r)) return false;
-    if (f === "全部") return true;
-    if (f === "雨天OK") return rainOk(r);
-    return r.tags.includes(f);
-  }).sort((a, b) => seenPlaces(a).length - seenPlaces(b).length || a.drive - b.drive);
-  $("#routeList").innerHTML = list.map(routeCard).join("")
-    || `<div class="empty">${f === "✓ 去過的" ? "還沒有去過的路線" : f === "🙈 不想去的" ? "沒有藏起來的路線" : "沒有符合的路線"}</div>`;
+  for (const [type, cfg] of Object.entries(ROUTE_TABS)) {
+    // 去過的路線預設藏起來，要看就點「✓ 去過的」
+    const filters = [...cfg.filters, "✓ 去過的", "🙈 不想去的"];
+    const f = state.routeFilter[type];
+    $(cfg.chips).innerHTML = filters.map((x) => `<button class="${x === f ? "on" : ""}" data-rf="${type}|${x}">${x}</button>`).join("");
+    const done = visitedSets().routes;
+    const list = state.routes.filter((r) => {
+      if (isNight(r) !== (type === "night")) return false;
+      if (f === "✓ 去過的") return done.has(r.id);
+      if (f === "🙈 不想去的") return routeHidden(r);
+      if (done.has(r.id) || routeHidden(r)) return false;
+      if (f === "季節限定") return !!r.season;
+      if (!inSeason(r)) return false;
+      if (f === "全部") return true;
+      if (f === "雨天OK") return rainOk(r);
+      return r.tags.includes(f);
+    }).sort((a, b) => seenPlaces(a).length - seenPlaces(b).length || a.drive - b.drive);
+    $(cfg.list).innerHTML = list.map(routeCard).join("")
+      || `<div class="empty">${f === "✓ 去過的" ? "還沒有去過的路線" : f === "🙈 不想去的" ? "沒有藏起來的路線" : "沒有符合的路線"}</div>`;
+  }
 }
 
 function renderEvents() {
@@ -473,10 +496,12 @@ document.addEventListener("click", (ev) => {
   } else if (t.dataset.open) {
     if (ev.target.closest("a")) return;
     openRoute(t.dataset.open);
-  } else if (t.dataset.rf) { state.routeFilter = t.dataset.rf; renderRoutes(); }
+  } else if (t.dataset.rf) { const [type, f] = t.dataset.rf.split("|"); state.routeFilter[type] = f; renderRoutes(); }
   else if (t.dataset.ef) { state.evFilter = t.dataset.ef; renderEvents(); }
 });
 $("#pickBtn").onclick = doPick;
+document.querySelectorAll("[data-mode]").forEach((b) => { b.onclick = () => setPickMode(b.dataset.mode); });
+setPickMode(new Date().getHours() >= 15 ? "night" : "day");
 $("#evSearch").oninput = renderEvents;
 
 (async function init() {

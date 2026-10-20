@@ -17,12 +17,17 @@
 <nav class="tabs" role="tablist">
   <button data-tab="pick" class="on">幫我決定</button>
   <button data-tab="routes">半日遊</button>
+  <button data-tab="night">夜遊</button>
   <button data-tab="events">展覽</button>
   <button data-tab="log">去過</button>
 </nav>
 
 <main>
   <section id="tab-pick" class="tab on">
+    <div class="seg">
+      <button data-mode="day">☀️ 白天半日遊</button>
+      <button data-mode="night">🌙 晚上夜遊</button>
+    </div>
     <button id="pickBtn" class="big">🎲 這次去哪？</button>
     <div id="pickOut"></div>
     <h2 class="sec">⏰ 快結束的展覽</h2>
@@ -32,6 +37,12 @@
   <section id="tab-routes" class="tab">
     <div class="chips" id="routeChips"></div>
     <div id="routeList"></div>
+  </section>
+
+  <section id="tab-night" class="tab">
+    <p class="muted small" style="margin:0 0 8px">傍晚 6 點左右出發、晚上 10 點左右回到家</p>
+    <div class="chips" id="nightChips"></div>
+    <div id="nightList"></div>
   </section>
 
   <section id="tab-events" class="tab">
