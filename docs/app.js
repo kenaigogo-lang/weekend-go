@@ -301,7 +301,8 @@ function choose(list, idx, fits) {
   return c.length ? c[idx % c.length] : null;
 }
 function eatStep(venue, e, meal, idx, drive) {
-  const f = venue && choose(state.foods[venue.food] || [], idx, (x) => x.meals.includes(meal));
+  // 點心時段什麼都可以吃；正餐時段只挑有供應那一餐的店
+  const f = venue && choose(state.foods[venue.food] || [], idx, (x) => meal === "點心" || x.meals.includes(meal));
   if (!f) {
     return { kind: "eat", title: `${meal}：附近找吃的`, q: `${e.place} 附近 小吃`, drive, stay: 50,
       detail: "這個場館附近還沒整理過在地老店，先用地圖找評價高、不是連鎖的店。想固定推薦的話，跟 Claude 說一聲。" };
