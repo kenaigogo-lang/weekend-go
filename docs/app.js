@@ -46,6 +46,7 @@ function routeHere(r) {
   if (d >= 60) tags.push("稍遠");
   return {
     ...r, drive: d, here: fixed != null, tags,
+    name: d >= 60 ? r.name : r.name.replace("【稍遠】", ""),
     steps: r.steps.map((s, i) => (i === 0 ? { ...s, drive: d } : s)),
     // 原本的回程說明是從樹林寫的，換地方就改成自動算的
     tips: HOME.id === "shulin" ? r.tips : [...(r.tips || []).filter((t) => !/回程/.test(t)), `回程回${HOME.label}約 ${d} 分`],
