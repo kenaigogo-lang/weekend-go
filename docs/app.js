@@ -1,5 +1,17 @@
 const REPO = "kenaigogo-lang/weekend-go";
-const HOME = { name: "樹林車站", lat: 24.9906, lng: 121.4246 };
+// 出發地：每支手機記住自己選的，網址加 ?from=林口 也可以指定
+const ORIGINS = {
+  shulin: { id: "shulin", label: "樹林", name: "樹林車站", lat: 24.9906, lng: 121.4246 },
+  linkou: { id: "linkou", label: "林口", name: "林口郵局 新北市林口區文化二路一段", lat: 25.0745, lng: 121.3885 },
+};
+const ORIGIN_KEY = "weekend-go-origin";
+function initialOrigin() {
+  const p = new URLSearchParams(location.search).get("from");
+  const hit = p && Object.values(ORIGINS).find((o) => o.id === p || o.label === p);
+  if (hit) return hit;
+  try { return ORIGINS[localStorage.getItem(ORIGIN_KEY)] || ORIGINS.shulin; } catch { return ORIGINS.shulin; }
+}
+let HOME = initialOrigin();
 const RAIN_OK = ["雨天OK", "室內"];
 
 const state = { routes: [], events: [], visited: [], skipped: [], venues: [], foods: {}, weather: null, pickOrder: [], pickIdx: 0, pickMode: "day", routeFilter: { day: "全部", night: "全部" }, evFilter: "全部" };
@@ -17,6 +29,43 @@ function kmBetween(a, b) {
   const r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2;
   return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+
+// ---------- 出發地 ----------
+// 粗估週末車程：市區繞路＋塞車，經驗值（跟 fetch_events.py 同一條公式）
+const estMin = (pt) => Math.round(5 + kmBetween(HOME, pt) * 1.6);
+const minOf = (x) => (x.lat ? estMin(x) : HOME.id === "shulin" ? x.min ?? null : null);
+
+// 路線的車程用 from[出發地]（手估）；沒寫的代表從這裡不推，打開時再用座標估
+function routeHere(r) {
+  const fixed = r.from?.[HOME.id] ?? (HOME.id === "shulin" ? r.drive : undefined);
+  const first = r.steps.find((s) => s.lat);
+  const d = fixed ?? (first ? estMin(first) : 40);
+  const tags = r.tags.filter((t) => t !== "近" && t !== "稍遠");
+  if (d <= 25) tags.push("近");
+  if (d >= 60) tags.push("稍遠");
+  return {
+    ...r, drive: d, here: fixed != null, tags,
+    steps: r.steps.map((s, i) => (i === 0 ? { ...s, drive: d } : s)),
+    // 原本的回程說明是從樹林寫的，換地方就改成自動算的
+    tips: HOME.id === "shulin" ? r.tips : [...(r.tips || []).filter((t) => !/回程/.test(t)), `回程回${HOME.label}約 ${d} 分`],
+  };
+}
+
+function renderOrigin() {
+  $("#originSwitch").innerHTML = "從 " + Object.values(ORIGINS)
+    .map((o) => `<button class="${o.id === HOME.id ? "on" : ""}" data-origin="${o.id}">${o.label}</button>`).join("") + " 出發";
+}
+function setOrigin(id) {
+  HOME = ORIGINS[id];
+  try { localStorage.setItem(ORIGIN_KEY, id); } catch {}
+  state.routes = state.allRoutes.map(routeHere);
+  renderOrigin();
+  state.pickOrder = [];
+  $("#pickOut").innerHTML = "";
+  renderOrigin();
+  renderAll();
+  loadWeather();
 }
 
 // ---------- 連結 ----------
@@ -166,7 +215,7 @@ function doPick() {
   if (!state.pickOrder.length || state.pickIdx >= state.pickOrder.length) {
     const done = visitedSets().routes;
     const night = state.pickMode === "night";
-    state.pickOrder = state.routes.filter((r) => isNight(r) === night && inSeason(r) && !done.has(r.id) && !routeHidden(r))
+    state.pickOrder = state.routes.filter((r) => r.here && isNight(r) === night && inSeason(r) && !done.has(r.id) && !routeHidden(r))
       .map(scoreRoute).sort((a, b) => b.s - a.s);
     state.pickIdx = 0;
   }
@@ -222,7 +271,7 @@ function eventCard(e) {
     <h3>${esc(e.title)}</h3>
     <div class="meta">
       <span>📍 ${esc(e.place)}</span>
-      ${e.min ? `<span>🚗 約 ${e.min} 分</span>` : ""}
+      ${minOf(e) ? `<span>🚗 約 ${minOf(e)} 分</span>` : ""}
       <span>${e.permanent ? "常設展" : `${e.start.slice(5).replace("-", "/")}–${e.end.slice(5).replace("-", "/")}`}</span>
       ${badge}
     </div>
@@ -248,7 +297,7 @@ function renderTimeline(r, start) {
     t += s.drive;
     const arrive = t;
     t += s.stay;
-    const driveTxt = s.drive ? `${i === 0 ? "從樹林" : ""}開車約 ${s.drive} 分` : i ? "走路過去" : "";
+    const driveTxt = s.drive ? `${i === 0 ? `從${HOME.label}` : ""}開車約 ${s.drive} 分` : i ? "走路過去" : "";
     return `<li>
       <span class="t">${fmt(arrive)}</span><span class="dot"></span>
       ${driveTxt ? `<div class="drive">${driveTxt}</div>` : ""}
@@ -262,7 +311,7 @@ function renderTimeline(r, start) {
       </div>
     </li>`;
   });
-  items.push(`<li><span class="t">${fmt(t + r.drive)}</span><span class="dot"></span><h4>🏠 回到樹林</h4><div class="drive">回程約 ${r.drive} 分（塞車的話會更久）</div></li>`);
+  items.push(`<li><span class="t">${fmt(t + r.drive)}</span><span class="dot"></span><h4>🏠 回到${HOME.label}</h4><div class="drive">回程約 ${r.drive} 分（塞車的話會更久）</div></li>`);
   return items.join("");
 }
 
@@ -344,7 +393,7 @@ function eatStep(venue, e, meal, idx, drive) {
     detail: f.detail + (ate(f.name) ? "（之前吃過）" : ""), swap: "eat" };
 }
 function buildPlan(e, venue, start, sel) {
-  const drive0 = e.min ?? (venue ? Math.round(5 + kmBetween(HOME, venue) * 1.6) : 40);
+  const drive0 = minOf(e) ?? (venue ? Math.round(5 + kmBetween(HOME, venue) * 1.6) : 40);
   const exhibit = { kind: "see", title: e.title, q: e.address || e.place, drive: drive0, stay: 90,
     detail: `📍 ${e.place}${e.price ? `｜🎟️ ${e.price.slice(0, 50)}` : ""}${venue ? `｜🅿️ 可以停 ${venue.parking}` : ""}` };
   const w = venue && choose(venue.walks, sel.walk, () => true);
@@ -443,6 +492,7 @@ function renderRoutes() {
     const done = visitedSets().routes;
     const list = state.routes.filter((r) => {
       if (isNight(r) !== (type === "night")) return false;
+      if (!r.here && !["✓ 去過的", "🙈 不想去的"].includes(f)) return false;
       if (f === "✓ 去過的") return done.has(r.id);
       if (f === "🙈 不想去的") return routeHidden(r);
       if (done.has(r.id) || routeHidden(r)) return false;
@@ -466,7 +516,7 @@ function renderEvents() {
     if (state.evFilter === "🙈 不想去的") return eventHidden(e);
     if (eventHidden(e)) return false;
     switch (state.evFilter) {
-      case "30 分內": return e.min && e.min <= 30;
+      case "30 分內": return minOf(e) && minOf(e) <= 30;
       case "快結束": return !e.permanent && daysUntil(e.end) <= 14 && daysUntil(e.start) <= 0;
       case "免費": return /免費|免門票|不收費/.test(e.price);
       case "新開展": return daysUntil(e.start) > -14;
@@ -531,7 +581,7 @@ function showCard(s) {
   return `<div class="card">
     <div class="meta"><span class="badge">${s.times.join("、")} 開演</span><span class="tag" style="margin:0">${esc(s.cat)}</span></div>
     <h3 style="margin-top:4px">${esc(s.title)}</h3>
-    <div class="meta"><span>📍 ${esc(s.place)}</span>${s.min ? `<span>🚗 約 ${s.min} 分</span>` : ""}</div>
+    <div class="meta"><span>📍 ${esc(s.place)}</span>${minOf(s) ? `<span>🚗 約 ${minOf(s)} 分</span>` : ""}</div>
     ${s.price ? `<div class="meta" style="margin-top:2px">🎟️ ${esc(s.price)}</div>` : ""}
     <button class="btn primary" style="display:block;width:100%;margin-top:10px" data-show="${esc(s.id)}">🌙 排成夜遊（晚餐＋表演）</button>
     <div class="row">
@@ -611,7 +661,7 @@ function buildShowPlan(s, time, sel) {
   const pt = showPoint(s);
   const start = toMin(time);
   const end = start + 120;
-  const drive0 = s.min ?? (pt ? Math.round(5 + kmBetween(HOME, pt) * 1.6) : 40);
+  const drive0 = minOf(s) ?? (pt ? Math.round(5 + kmBetween(HOME, pt) * 1.6) : 40);
   const show = { kind: "show", title: `${time} 開演：${s.title}`, name: s.title, q: s.address || s.place, drive: drive0, stay: 15 + 120,
     detail: `📍 ${s.place}｜提早 15 分鐘進場，演出長度先抓 2 小時（以售票頁為準）。${s.price ? "🎟️ " + s.price : ""}` };
   const early = start < 18 * 60 + 30;
@@ -664,7 +714,7 @@ function openShowPlan(id, push = true) {
   document.body.style.overflow = "hidden";
   const draw = () => {
     const plan = buildShowPlan(s, sel.time, sel);
-    $("#departTip").innerHTML = `建議 <b style="font-size:20px">${plan.depart}</b> 從樹林出發`;
+    $("#departTip").innerHTML = `建議 <b style="font-size:20px">${plan.depart}</b> 從${HOME.label}出發`;
     $("#tl").innerHTML = renderTimeline(plan, plan.depart);
     $("#planNav").href = fullRouteUrl(plan);
     $("#planLog").href = logUrl("", "表演：" + s.title, "排的行程：" + plan.steps.map((x) => x.name || x.title).join(" → "));
@@ -687,11 +737,12 @@ function renderAll() {
 }
 
 document.addEventListener("click", (ev) => {
-  const t = ev.target.closest("[data-tab],[data-open],[data-rf],[data-ef],[data-hide],[data-unhide],[data-plan],[data-show],[data-nd],[data-sf],[data-more]");
+  const t = ev.target.closest("[data-tab],[data-open],[data-rf],[data-ef],[data-hide],[data-unhide],[data-plan],[data-show],[data-nd],[data-sf],[data-more],[data-origin]");
   if (!t) return;
   if (t.dataset.hide) { ev.stopPropagation(); hide(t.dataset.hide); if (t.closest("#pickOut")) doPick(); return; }
   if (t.dataset.unhide) { unhide(t.dataset.unhide); return; }
   if (t.dataset.plan) { openPlan(t.dataset.plan); return; }
+  if (t.dataset.origin) { setOrigin(t.dataset.origin); return; }
   if (t.dataset.show) { openShowPlan(t.dataset.show); return; }
   if (t.dataset.nd) { state.nightDate = t.dataset.nd; state.showAll = false; renderNight(); return; }
   if (t.dataset.sf) { state.spotFilter = t.dataset.sf; renderNight(); return; }
@@ -715,7 +766,9 @@ $("#evSearch").oninput = renderEvents;
   const [routes, events, visited, skipped, venues, shows, night] = await Promise.all([
     getJson("data/routes.json"), getJson("data/events.json"), getJson("data/visited.json"), getJson("data/skipped.json"), getJson("data/venues.json"), getJson("data/shows.json"), getJson("data/night.json"),
   ]);
-  state.routes = routes?.routes || [];
+  state.allRoutes = routes?.routes || [];
+  state.routes = state.allRoutes.map(routeHere);
+  renderOrigin();
   state.events = events?.events || [];
   state.visited = visited?.visits || [];
   state.skipped = skipped?.skips || [];
