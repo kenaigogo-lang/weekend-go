@@ -1,5 +1,5 @@
 {
- "updated": "2026-11-20 10:00",
+ "updated": "2026-11-21 09:57",
  "shows": [
   {
    "id": "6aac3bc626b324165c32e4ec-1129",
@@ -32,6 +32,22 @@
    "min": null,
    "price": "3000、2700、2200、1700、1200",
    "url": "https://ticket.com.tw/Application/UTK02/UTK0201_.aspx?PRODUCT_ID=P1COVZN7"
+  },
+  {
+   "id": "6ac28f8826b324165c32e593-1205",
+   "title": "2026 MieAyaMyyuChanya 1st Fan Meeting in Taipei",
+   "cat": "演唱會",
+   "date": "2026-12-05",
+   "times": [
+    "17:00"
+   ],
+   "place": "台北WESTAR",
+   "address": "台北市萬華區漢中街116號8樓",
+   "lat": null,
+   "lng": null,
+   "min": null,
+   "price": "6799、5599、4599、3299",
+   "url": "https://ticket.com.tw/Application/UTK02/UTK0201_.aspx?PRODUCT_ID=P1G9ESVP"
   }
  ]
 }
