@@ -1,5 +1,5 @@
 {
- "updated": "2026-11-24 13:08",
+ "updated": "2026-11-25 11:56",
  "shows": [
   {
    "id": "6aac3bc626b324165c32e4ec-1129",
@@ -48,6 +48,22 @@
    "min": null,
    "price": "6799、5599、4599、3299",
    "url": "https://ticket.com.tw/Application/UTK02/UTK0201_.aspx?PRODUCT_ID=P1G9ESVP"
+  },
+  {
+   "id": "6a9b2dc826b324165c32e36a-1209",
+   "title": "2026新逸交響樂團年度公演Ⅳ 延續風沙中的愛",
+   "cat": "音樂",
+   "date": "2026-12-09",
+   "times": [
+    "19:30"
+   ],
+   "place": "國家音樂廳",
+   "address": "台北市中正區中山南路21-1號",
+   "lat": 25.0367564,
+   "lng": 121.519047,
+   "min": 22,
+   "price": "5000、2000、1500、1200、800、500",
+   "url": "https://ticket.com.tw/Application/UTK02/UTK0201_.aspx?PRODUCT_ID=P1F8SPFR"
   }
  ]
 }
