@@ -1,0 +1,18 @@
+{
+  "name": "週末去哪",
+  "short_name": "週末去哪",
+  "description": "週末半日遊、夜遊與北北桃基展覽手札，手機打開就能照著走。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8f4ed",
+  "theme_color": "#c2410c",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

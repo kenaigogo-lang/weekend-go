@@ -29,6 +29,91 @@ VENUES = {
     "ntcam": ("新北市美術館", "新北市鶯歌區館前路300號", (24.9583, 121.3546)),
 }
 
+# 文化部常漏填座標的常見北北桃基展演場館（除了 venues.json 以外再補這一張表）
+KNOWN_COORDS = [
+    (["郵政博物館"], (25.0319, 121.5150)),
+    (["國立歷史博物館"], (25.0315, 121.5113)),
+    (["藝術教育館", "南海路47號", "南海路四十七號"], (25.0323, 121.5121)),
+    (["當代工藝設計分館", "南海路41號"], (25.0322, 121.5125)),
+    (["金車文藝中心 臺北南京館", "金車文藝中心臺北南京館", "南京東路二段1號"], (25.0522, 121.5276)),
+    (["金車文藝中心 臺北承德館", "金車文藝中心臺北承德館"], (25.0617, 121.5180)),
+    (["得忌利士洋行", "齊柏林空間"], (25.1743, 121.4362)),
+    (["淡水分館"], (25.1726, 121.4384)),
+    (["臺灣客家茶文化館", "台灣客家茶文化館"], (24.8323, 121.1893)),
+    (["大溪慈湖", "後慈湖"], (24.8424, 121.2940)),
+    (["文山劇場"], (24.9921, 121.5416)),
+    (["桃園市土地公文化館"], (24.9982, 121.3089)),
+    (["桃園展演中心"], (25.0169, 121.3005)),
+    (["橫山書法藝術館"], (25.0120, 121.2085)),
+    (["桃園市兒童美術館"], (25.0022, 121.2039)),
+    (["CLAPPER STUDIO", "三創生活"], (25.0454, 121.5313)),
+    (["臺北市政大樓親子劇場", "台北市政大樓親子劇場", "市府路1號"], (25.0375, 121.5644)),
+    (["WESTAR", "西門紅樓"], (25.0434, 121.5067)),
+    (["國家音樂廳", "國家戲劇院", "兩廳院"], (25.0365, 121.5190)),
+    (["臺北表演藝術中心", "台北表演藝術中心"], (25.0846, 121.5250)),
+    (["臺北流行音樂中心", "台北流行音樂中心"], (25.0525, 121.5988)),
+    (["台北小巨蛋", "臺北小巨蛋"], (25.0513, 121.5500)),
+    (["台北國際會議中心", "臺北國際會議中心", "TICC"], (25.0332, 121.5608)),
+    (["城市舞台"], (25.0480, 121.5518)),
+    (["水源劇場"], (25.0138, 121.5349)),
+    (["Legacy Taipei"], (25.0441, 121.5293)),
+    (["Zepp New Taipei"], (25.0598, 121.4494)),
+    (["新北市藝文中心"], (25.0252, 121.4714)),
+    (["基隆文化中心", "基隆表演藝術中心"], (25.1310, 121.7446)),
+    (["台北當代藝術館", "臺北當代藝術館"], (25.0507, 121.5190)),
+    (["國立臺灣博物館", "國立台灣博物館"], (25.0427, 121.5150)),
+    (["國立臺灣科學教育館", "科教館"], (25.0960, 121.5166)),
+    (["天文科學教育館"], (25.0958, 121.5186)),
+    (["忠泰美術館"], (25.0445, 121.5382)),
+    (["富邦美術館"], (25.0394, 121.5715)),
+    (["國父紀念館"], (25.0400, 121.5600)),
+]
+
+BAD_VENUE_RE = re.compile(r"線上|候機室|出境大廳|管制區|戶政事務所|地政事務所|地政局|區公所|稅捐")
+_VENUE_COORDS = None
+
+
+def load_venue_coords():
+    global _VENUE_COORDS
+    if _VENUE_COORDS is None:
+        vfile = OUT.parent / "venues.json"
+        if vfile.exists():
+            data = json.loads(vfile.read_text(encoding="utf-8"))
+            _VENUE_COORDS = [(v["match"], (v["lat"], v["lng"])) for v in data.get("venues") or [] if v.get("lat")]
+        else:
+            _VENUE_COORDS = []
+    return _VENUE_COORDS
+
+
+def fallback_coords(place, address):
+    """文化部漏填座標時，依場館名稱與地址從已知場館表補齊。"""
+    text = f"{place} {address}"
+    compact = re.sub(r"\s+", "", text)
+    for table in (KNOWN_COORDS, load_venue_coords()):
+        for keywords, pt in table:
+            if any(k in text or k in compact for k in keywords):
+                return pt
+    return None
+
+
+def clean_place(place, address):
+    p = re.sub(r"\s+", " ", place or "").strip().rstrip("=").strip()
+    addr = re.sub(r"\s+", "", address or "")
+    # 南海路 47 號只填展廳名（美學空間、第3展覽廳）時補上館名
+    if re.search(r"南海路(47|四十七)號", addr) and "藝術教育館" not in p:
+        p = f"國立臺灣藝術教育館 {p}".strip()
+    return p
+
+
+def is_bad_venue(place, address, unit=""):
+    compact = re.sub(r"\s+", "", f"{place}{address}{unit}")
+    if BAD_VENUE_RE.search(compact):
+        return True
+    # 地點以「=」結尾（文化部缺場地名時的行政區佔位字）且沒有門牌地址
+    if (place or "").strip().endswith("=") and not re.search(r"[路街巷段號樓]", address or ""):
+        return True
+    return False
+
 
 def km_between(a, b):
     r = math.radians
@@ -109,28 +194,32 @@ def from_culture(data):
         if not in_window(start, end):
             continue
 
+        unit = e.get("showUnit") or ""
         best = None
         for info in e.get("showInfo") or []:
-            text = (info.get("location") or "") + (info.get("locationName") or "")
-            if not AREA.search(text) or "線上" in text:
+            raw_place = info.get("locationName") or ""
+            raw_addr = info.get("location") or ""
+            text = raw_addr + raw_place
+            if not AREA.search(text) or is_bad_venue(raw_place, raw_addr, unit):
                 continue
-            c = coords(info)
+            place = clean_place(raw_place, raw_addr)
+            c = coords(info) or fallback_coords(place, raw_addr)
             km = km_between(ORIGIN, c) if c else None
             if best is None or (km is not None and (best[1] is None or km < best[1])):
-                best = (info, km, c)
+                best = (info, km, c, place, raw_addr)
         if best is None:
             continue
 
-        info, km, c = best
+        info, km, c, place, raw_addr = best
         ev = make_event(
             e["UID"], e["title"], start, end,
-            info.get("locationName") or "", info.get("location") or "", c,
+            place, raw_addr, c,
             info.get("price") or "", e.get("sourceWebPromote") or e.get("webSales") or "",
-            e.get("showUnit") or "", e.get("descriptionFilterHtml") or "",
+            unit, e.get("descriptionFilterHtml") or "",
         )
-        # endTime 的時刻通常就是每天關門時間，夜遊頁用來找晚上還開的展覽
+        # endTime 的時刻通常就是每天關門時間，夜遊頁用來找晚上還開的展覽（過濾 00:00 或明顯誤植的凌晨時刻）
         m = re.search(r" (\d\d:\d\d)", info.get("endTime") or "")
-        if m and m.group(1) != "00:00":
+        if m and "09:00" <= m.group(1) <= "23:59":
             ev["close"] = m.group(1)
         out.append(ev)
     print(f"文化部: kept {len(out)} of {len(data)} events")
@@ -149,8 +238,10 @@ def from_shows(data):
         if not cat:
             continue
         for info in e.get("showInfo") or []:
-            text = (info.get("location") or "") + (info.get("locationName") or "")
-            if not AREA.search(text) or "線上" in text:
+            raw_place = info.get("locationName") or ""
+            raw_addr = info.get("location") or ""
+            text = raw_addr + raw_place
+            if not AREA.search(text) or is_bad_venue(raw_place, raw_addr):
                 continue
             try:
                 t = datetime.strptime(info["time"], "%Y/%m/%d %H:%M:%S")
@@ -162,7 +253,8 @@ def from_shows(data):
             if key in sessions:
                 sessions[key]["times"] = sorted(set(sessions[key]["times"] + [t.strftime("%H:%M")]))
                 continue
-            c = coords(info)
+            place = clean_place(raw_place, raw_addr)
+            c = coords(info) or fallback_coords(place, raw_addr)
             km = km_between(ORIGIN, c) if c else None
             sessions[key] = {
                 "id": f"{e['UID']}-{t:%m%d}",
@@ -170,8 +262,8 @@ def from_shows(data):
                 "cat": cat,
                 "date": t.date().isoformat(),
                 "times": [t.strftime("%H:%M")],
-                "place": (info.get("locationName") or "").strip(),
-                "address": (info.get("location") or "").strip(),
+                "place": place,
+                "address": raw_addr.strip(),
                 "lat": c[0] if c else None,
                 "lng": c[1] if c else None,
                 "min": round(5 + km * 1.6) if km is not None else None,
@@ -335,11 +427,14 @@ def title_key(title):
     return re.sub(r"[\W_]+", "", t).lower()
 
 
-def is_dup(title, keys):
+def find_dup(title, keys):
     k = title_key(title)
     if not k:
-        return True
-    return any(k == o or (min(len(k), len(o)) >= 6 and (k in o or o in k)) for o in keys)
+        return -1
+    for i, o in enumerate(keys):
+        if k == o or (min(len(k), len(o)) >= 6 and (k in o or o in k)):
+            return i
+    return None
 
 
 def main():
@@ -348,8 +443,9 @@ def main():
         "updated": datetime.now(TW).strftime("%Y-%m-%d %H:%M"),
         "shows": from_shows(data),
     }, ensure_ascii=False, indent=1), encoding="utf-8")
-    out = from_culture(data)
-    keys = [title_key(e["title"]) for e in out]
+
+    # 場館官網資料通常較完整（含精準座標、展廳、票價），優先採納；再用文化部補上其餘展覽與關門時間
+    out, keys = [], []
     for name, scrape in [("華山", huashan), ("松菸", songshan), ("北美館", tfam),
                          ("中正紀念堂", cksmh), ("新北市美術館", ntcam)]:
         try:
@@ -359,12 +455,30 @@ def main():
             continue
         added = 0
         for e in found:
-            if is_dup(e["title"], keys):
+            if find_dup(e["title"], keys) is not None:
                 continue
             keys.append(title_key(e["title"]))
             out.append(e)
             added += 1
         print(f"{name}: found {len(found)}, added {added}")
+
+    culture_added = 0
+    for e in from_culture(data):
+        idx = find_dup(e["title"], keys)
+        if idx is not None:
+            if idx >= 0:
+                dst = out[idx]
+                if e.get("close") and not dst.get("close"):
+                    dst["close"] = e["close"]
+                if e.get("price") and not dst.get("price"):
+                    dst["price"] = e["price"]
+                if e.get("desc") and not dst.get("desc"):
+                    dst["desc"] = e["desc"]
+            continue
+        keys.append(title_key(e["title"]))
+        out.append(e)
+        culture_added += 1
+    print(f"文化部: merged, added {culture_added} unique events")
 
     out.sort(key=lambda x: (x["permanent"], x["end"]))
     OUT.parent.mkdir(parents=True, exist_ok=True)

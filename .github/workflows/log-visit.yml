@@ -15,7 +15,8 @@ concurrency:
 
 jobs:
   log:
-    if: contains(github.event.issue.labels.*.name, 'visited') || contains(github.event.issue.labels.*.name, 'skip')
+    # 只允許 repo 擁有者送出的表單寫入 main，避免公開 repo 被陌生帳號觸發
+    if: github.event.issue.user.login == github.repository_owner && (contains(github.event.issue.labels.*.name, 'visited') || contains(github.event.issue.labels.*.name, 'skip'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,13 +34,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/data/visited.json docs/data/skipped.json 行程紀錄.md
-          git commit -m "記錄行程 #${{ github.event.issue.number }}"
-          git pull --rebase
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "記錄行程 #${{ github.event.issue.number }}"
+            git pull --rebase
+            git push
+          fi
 
       - name: 關閉 issue、重新部署網頁
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue close ${{ github.event.issue.number }} --comment "已記錄 ✅ 網頁約 1 分鐘後更新。"
-          gh workflow run deploy.yml
+          gh issue close ${{ github.event.issue.number }} --comment "已記錄 ✅ 網頁約 15 秒後更新。"
+          gh workflow run deploy.yml -f fetch=false

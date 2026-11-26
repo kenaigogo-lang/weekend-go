@@ -1,5 +1,5 @@
 {
- "updated": "2026-11-25 11:56",
+ "updated": "2026-11-26 11:01",
  "shows": [
   {
    "id": "6aac3bc626b324165c32e4ec-1129",
@@ -11,9 +11,9 @@
    ],
    "place": "CLAPPER STUDIO 展演廳(三創生活)",
    "address": "臺北市中正區正守里市民大道三段2號5樓",
-   "lat": null,
-   "lng": null,
-   "min": null,
+   "lat": 25.0454,
+   "lng": 121.5313,
+   "min": 25,
    "price": "5880",
    "url": "https://ticket.com.tw/Application/UTK02/UTK0201_.aspx?PRODUCT_ID=P1FWXUND"
   },
@@ -27,9 +27,9 @@
    ],
    "place": "臺北市政大樓親子劇場",
    "address": "台北市市府路1號2樓",
-   "lat": null,
-   "lng": null,
-   "min": null,
+   "lat": 25.0375,
+   "lng": 121.5644,
+   "min": 29,
    "price": "3000、2700、2200、1700、1200",
    "url": "https://ticket.com.tw/Application/UTK02/UTK0201_.aspx?PRODUCT_ID=P1COVZN7"
   },
@@ -43,9 +43,9 @@
    ],
    "place": "台北WESTAR",
    "address": "台北市萬華區漢中街116號8樓",
-   "lat": null,
-   "lng": null,
-   "min": null,
+   "lat": 25.0434,
+   "lng": 121.5067,
+   "min": 21,
    "price": "6799、5599、4599、3299",
    "url": "https://ticket.com.tw/Application/UTK02/UTK0201_.aspx?PRODUCT_ID=P1G9ESVP"
   },

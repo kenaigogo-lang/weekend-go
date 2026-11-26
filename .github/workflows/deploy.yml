@@ -6,6 +6,11 @@ on:
   schedule:
     - cron: "0 21 * * *"   # 台灣時間每天 05:00
   workflow_dispatch:
+    inputs:
+      fetch:
+        description: "重新抓取展覽與表演資料"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -25,10 +30,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 抓展覽資料（失敗就沿用舊的）
+      - name: 抓展覽資料（每日排程或手動觸發時才抓，失敗沿用舊的）
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.fetch != false)
         run: python3 scripts/fetch_events.py || echo "::warning::展覽資料抓取失敗，沿用舊資料"
 
       - name: Commit 新資料
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.fetch != false)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -38,8 +45,11 @@ jobs:
             git pull --rebase && git push
           fi
 
-      - name: 加版本號，避免手機一直用舊的 app.js
-        run: sed -i "s/app.js\"/app.js?v=${GITHUB_SHA::7}\"/; s/style.css\"/style.css?v=${GITHUB_SHA::7}\"/" docs/index.html
+      - name: 加版本號，避免手機一直用舊的 app.js／快取
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          sed -i "s/app.js\"/app.js?v=${SHA}\"/; s/style.css\"/style.css?v=${SHA}\"/" docs/index.html
+          sed -i "s/weekend-go-v1/weekend-go-${SHA}/" docs/sw.js
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
